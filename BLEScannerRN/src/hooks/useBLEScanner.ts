@@ -155,7 +155,7 @@ export function useBLEScanner() {
 
       if (existingIndex >= 0) {
         // Update existing device with fresh readings.
-        const existing = updated[existingIndex];
+        const existing = prev[existingIndex];
         const newRssiHistory = [...existing.rssiHistory, rssi].slice(-MAX_HISTORY);
         const newFilteredHistory = [...existing.filteredHistory, filteredRssi].slice(-MAX_HISTORY);
         updated = [...prev];

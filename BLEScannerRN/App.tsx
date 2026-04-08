@@ -1,8 +1,13 @@
 /**
  * BLE Scanner — Main App Component
  *
+ * Supports two data sources via a Demo/Live mode toggle:
+ *   - **Demo Mode**: Simulates 8 fake BLE devices with fluctuating RSSI
+ *     so you can test the full UI without real beacons nearby
+ *   - **Live Mode**: Real BLE scanning via CoreBluetooth / Android BLE
+ *
  * Two-tab layout:
- *   Tab 1 "Scanner"  — live BLE device list with RSSI
+ *   Tab 1 "Scanner"  — device list with real-time RSSI
  *   Tab 2 "Kalman"   — Kalman filter test screen with adjustable params and chart
  */
 
@@ -18,6 +23,7 @@ import {
   Alert,
 } from 'react-native';
 import { useBLEScanner } from './src/hooks/useBLEScanner';
+import { useDemoScanner } from './src/hooks/useDemoScanner';
 import { DeviceCard } from './src/components/DeviceCard';
 import { KalmanTestScreen } from './src/screens/KalmanTestScreen';
 import { BLEDeviceInfo } from './src/utils/types';
@@ -25,6 +31,15 @@ import { BLEDeviceInfo } from './src/utils/types';
 type Tab = 'scanner' | 'kalman';
 
 export default function App() {
+  // ── Mode toggle: "demo" lets you test UI without real BLE hardware ──
+  const [mode, setMode] = useState<'demo' | 'live'>('demo');
+
+  // Both hooks run, but only the active mode's data is displayed.
+  const live = useBLEScanner();
+  const demo = useDemoScanner();
+
+  // Pick the active scanner based on the current mode.
+  const scanner = mode === 'demo' ? demo : live;
   const {
     devices,
     isScanning,
@@ -34,11 +49,11 @@ export default function App() {
     stopScanning,
     selectedDeviceId,
     setSelectedDeviceId,
-  } = useBLEScanner();
+  } = scanner;
 
   const [activeTab, setActiveTab] = useState<Tab>('scanner');
 
-  // Show an alert when Bluetooth is detected as powered off.
+  // Show an alert when Bluetooth is detected as powered off (live mode only).
   React.useEffect(() => {
     if (bluetoothOff) {
       Alert.alert(
@@ -48,6 +63,12 @@ export default function App() {
       );
     }
   }, [bluetoothOff]);
+
+  /** Switch between Demo and Live modes. Stops scanning first. */
+  const handleModeSwitch = (newMode: 'demo' | 'live') => {
+    if (isScanning) stopScanning();
+    setMode(newMode);
+  };
 
   const handleToggleScan = () => {
     if (isScanning) {
@@ -99,6 +120,26 @@ export default function App() {
             ]}
           >
             {isScanning ? 'Stop' : 'Scan'}
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* ── Mode Selector: Demo / Live ── */}
+      <View style={styles.modeSelector}>
+        <TouchableOpacity
+          style={[styles.modeButton, mode === 'demo' && styles.modeButtonActive]}
+          onPress={() => handleModeSwitch('demo')}
+        >
+          <Text style={[styles.modeButtonText, mode === 'demo' && styles.modeButtonTextActive]}>
+            🧪 Demo
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.modeButton, mode === 'live' && styles.modeButtonActive]}
+          onPress={() => handleModeSwitch('live')}
+        >
+          <Text style={[styles.modeButtonText, mode === 'live' && styles.modeButtonTextActive]}>
+            📡 Live
           </Text>
         </TouchableOpacity>
       </View>
@@ -155,7 +196,9 @@ export default function App() {
               <Text style={styles.emptyIcon}>📡</Text>
               <Text style={styles.emptyTitle}>No BLE Devices Found</Text>
               <Text style={styles.emptySubtitle}>
-                Make sure Bluetooth is enabled and{'\n'}your ESP32 or other BLE beacon is nearby.
+                {mode === 'demo'
+                  ? 'Tap "Scan" to start the demo simulation.'
+                  : 'Make sure Bluetooth is enabled and\nyour ESP32 or other BLE beacon is nearby.'}
               </Text>
               {!isScanning && (
                 <TouchableOpacity style={styles.scanButton} onPress={startScanning}>
@@ -238,6 +281,38 @@ const styles = StyleSheet.create({
   toggleButtonText: {
     fontSize: 15,
     fontWeight: '700',
+  },
+  // Mode selector (Demo / Live toggle)
+  modeSelector: {
+    flexDirection: 'row',
+    marginHorizontal: 16,
+    marginBottom: 6,
+    backgroundColor: '#E5E5EA',
+    borderRadius: 10,
+    padding: 3,
+  },
+  modeButton: {
+    flex: 1,
+    paddingVertical: 8,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  modeButtonActive: {
+    backgroundColor: '#FFFFFF',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.15,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  modeButtonText: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#8E8E93',
+  },
+  modeButtonTextActive: {
+    color: '#1C1C1E',
+    fontWeight: '600',
   },
   // Status bar
   statusBar: {
