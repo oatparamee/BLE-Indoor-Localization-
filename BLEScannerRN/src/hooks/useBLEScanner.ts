@@ -13,7 +13,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { Platform, PermissionsAndroid } from 'react-native';
 import { BleManager, Device, State } from 'react-native-ble-plx';
 import { KalmanFilter } from '../utils/KalmanFilter';
-import { BLEDeviceInfo } from '../utils/types';
+import { BLEDeviceInfo, BLEScannerController } from '../utils/types';
 
 /** How many seconds before a device is considered stale and removed. */
 const STALE_TIMEOUT_MS = 10_000;
@@ -24,7 +24,7 @@ const MAX_HISTORY = 30;
 /** How often (ms) the cleanup timer runs to prune stale devices. */
 const CLEANUP_INTERVAL_MS = 2_000;
 
-export function useBLEScanner() {
+export function useBLEScanner(): BLEScannerController {
   // ── Published state ──────────────────────────────────────────────
   const [devices, setDevices] = useState<BLEDeviceInfo[]>([]);
   const [isScanning, setIsScanning] = useState(false);
@@ -155,7 +155,7 @@ export function useBLEScanner() {
 
       if (existingIndex >= 0) {
         // Update existing device with fresh readings.
-        const existing = updated[existingIndex];
+        const existing = prev[existingIndex];
         const newRssiHistory = [...existing.rssiHistory, rssi].slice(-MAX_HISTORY);
         const newFilteredHistory = [...existing.filteredHistory, filteredRssi].slice(-MAX_HISTORY);
         updated = [...prev];

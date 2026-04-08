@@ -4,6 +4,8 @@
 
 /** Signal strength category for color-coding the UI. */
 export type SignalStrength = 'strong' | 'medium' | 'weak';
+export type ScannerDataMode = 'mock' | 'live';
+export type WorkspaceTab = 'scanner' | 'signalLab';
 
 /**
  * Represents a single discovered BLE peripheral.
@@ -30,6 +32,17 @@ export interface BLEDeviceInfo {
 
   /** Last 30 Kalman-filtered RSSI readings for chart display. */
   filteredHistory: number[];
+}
+
+export interface BLEScannerController {
+  devices: BLEDeviceInfo[];
+  isScanning: boolean;
+  statusMessage: string;
+  bluetoothOff: boolean;
+  startScanning: () => void;
+  stopScanning: () => void;
+  selectedDeviceId: string | null;
+  setSelectedDeviceId: (id: string | null) => void;
 }
 
 /**
@@ -66,5 +79,7 @@ export function getSignalColor(strength: SignalStrength): string {
       return '#FFCC00'; // Yellow
     case 'weak':
       return '#FF3B30'; // Red
+    default:
+      return '#8E8E93';
   }
 }
