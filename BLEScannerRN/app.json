@@ -9,7 +9,7 @@
     "splash": {
       "backgroundColor": "#F2F2F7"
     },
-    "assetBundlePatterns": ["**/*"],
+    "newArchEnabled": true,
 
     "ios": {
       "supportsTablet": true,
