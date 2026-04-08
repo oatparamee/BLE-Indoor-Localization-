@@ -43,6 +43,26 @@ function applyKalman(rawHistory: number[], q: number, r: number): number[] {
   return rawHistory.map((v) => filter.update(v));
 }
 
+/** Deterministic pseudo-random in [0, 1) for repeatable synthetic data. */
+function seededUnit(i: number): number {
+  const x = Math.sin(i * 12.9898 + 78.233) * 43758.5453;
+  return x - Math.floor(x);
+}
+
+/**
+ * Builds a fixed-length noisy RSSI series (dBm) for offline Kalman testing.
+ * True signal drifts slowly; measurements add jitter — same inputs every time.
+ */
+function generateSyntheticRssiHistory(length = 30): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < length; i++) {
+    const trend = -62 + 7 * Math.sin(i / 3.2);
+    const noise = (seededUnit(i) - 0.5) * 14;
+    out.push(Math.round(trend + noise));
+  }
+  return out;
+}
+
 /** Simple +/− stepper for numeric parameters. */
 function Stepper({
   label,
@@ -116,21 +136,24 @@ const stepperStyles = StyleSheet.create({
 export function KalmanTestScreen({ devices, selectedDeviceId, setSelectedDeviceId }: Props) {
   const [q, setQ] = useState(0.1);
   const [r, setR] = useState(1.0);
+  /** When set, chart and stats use this instead of a discovered device (offline Kalman test). */
+  const [syntheticRawHistory, setSyntheticRawHistory] = useState<number[] | null>(null);
 
   const selected = devices.find((d) => d.id === selectedDeviceId) ?? null;
 
+  const rawHistory = syntheticRawHistory ?? selected?.rssiHistory ?? [];
+
   // Re-compute filtered history whenever raw history or params change.
   const reFilteredHistory = useMemo(() => {
-    if (!selected) return [];
-    return applyKalman(selected.rssiHistory, q, r);
-  }, [selected?.rssiHistory, q, r]);
+    if (rawHistory.length === 0) return [];
+    return applyKalman(rawHistory, q, r);
+  }, [rawHistory, q, r]);
 
   const screenWidth = Dimensions.get('window').width;
   const chartWidth = screenWidth - 48; // padding
   const barWidth = Math.max(4, Math.floor((chartWidth - 2) / 30) - 2);
 
   // Stats derived from history
-  const rawHistory = selected?.rssiHistory ?? [];
   const stats = useMemo(() => {
     if (rawHistory.length === 0) return null;
     const rawAvg = rawHistory.reduce((s, v) => s + v, 0) / rawHistory.length;
@@ -156,9 +179,54 @@ export function KalmanTestScreen({ devices, selectedDeviceId, setSelectedDeviceI
       contentContainerStyle={styles.content}
       showsVerticalScrollIndicator={false}
     >
+      {/* ── Synthetic Kalman demo (no BLE required) ── */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Kalman filter — synthetic demo</Text>
+        <Text style={styles.paramHint}>
+          Test the same 1D Kalman logic as live RSSI without scanning. Data is deterministic so you
+          can compare runs.
+        </Text>
+        <View style={styles.syntheticButtons}>
+          <TouchableOpacity
+            style={styles.syntheticPrimary}
+            onPress={() => {
+              setSelectedDeviceId(null);
+              setSyntheticRawHistory(generateSyntheticRssiHistory(30));
+            }}
+          >
+            <Text style={styles.syntheticPrimaryText}>Load synthetic noisy RSSI</Text>
+          </TouchableOpacity>
+          {syntheticRawHistory && (
+            <TouchableOpacity
+              style={styles.syntheticSecondary}
+              onPress={() => setSyntheticRawHistory(null)}
+            >
+              <Text style={styles.syntheticSecondaryText}>Clear demo — use device list below</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+        <View style={styles.expectedBox}>
+          <Text style={styles.expectedTitle}>Expected output</Text>
+          <Text style={styles.expectedBody}>
+            The <Text style={styles.bold}>blue (filtered)</Text> bars should follow the same overall
+            trend as <Text style={styles.bold}>gray (raw)</Text> but with smaller up/down swings. With
+            default Q and R, <Text style={styles.bold}>Filtered Std Dev</Text> should be lower than{' '}
+            <Text style={styles.bold}>Raw Std Dev</Text>. Raising R smooths more; raising Q tracks
+            faster.
+          </Text>
+        </View>
+      </View>
+
       {/* ── Section: Device Selector ── */}
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Select Device to Analyze</Text>
+        {syntheticRawHistory && (
+          <View style={styles.syntheticBanner}>
+            <Text style={styles.syntheticBannerText}>
+              Showing synthetic demo — pick a device to switch to live RSSI history.
+            </Text>
+          </View>
+        )}
         {devices.length === 0 ? (
           <View style={styles.emptyHint}>
             <Text style={styles.emptyHintText}>
@@ -174,7 +242,10 @@ export function KalmanTestScreen({ devices, selectedDeviceId, setSelectedDeviceI
               <TouchableOpacity
                 key={d.id}
                 style={[styles.deviceRow, active && styles.deviceRowActive]}
-                onPress={() => setSelectedDeviceId(active ? null : d.id)}
+                onPress={() => {
+                  setSyntheticRawHistory(null);
+                  setSelectedDeviceId(active ? null : d.id);
+                }}
               >
                 <View style={[styles.deviceDot, { backgroundColor: color }]} />
                 <View style={styles.deviceRowInfo}>
@@ -235,7 +306,12 @@ export function KalmanTestScreen({ devices, selectedDeviceId, setSelectedDeviceI
       {/* ── Section: RSSI Chart ── */}
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>
-          RSSI History {selected ? `— ${selected.name}` : ''}
+          RSSI History
+          {syntheticRawHistory
+            ? ' — Synthetic demo'
+            : selected
+              ? ` — ${selected.name}`
+              : ''}
         </Text>
 
         {/* Legend */}
@@ -271,7 +347,7 @@ export function KalmanTestScreen({ devices, selectedDeviceId, setSelectedDeviceI
                 <Text style={styles.chartEmptyText}>
                   {selected
                     ? 'Waiting for RSSI readings...'
-                    : 'Select a device above to see its chart'}
+                    : 'Load synthetic demo above or select a device'}
                 </Text>
               </View>
             ) : (
@@ -372,6 +448,65 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#1C1C1E',
     marginBottom: 12,
+  },
+  syntheticButtons: {
+    gap: 10,
+  },
+  syntheticPrimary: {
+    backgroundColor: '#007AFF',
+    borderRadius: 10,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  syntheticPrimaryText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  syntheticSecondary: {
+    backgroundColor: '#F2F2F7',
+    borderRadius: 10,
+    paddingVertical: 10,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#E5E5EA',
+  },
+  syntheticSecondaryText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#007AFF',
+  },
+  expectedBox: {
+    marginTop: 14,
+    backgroundColor: '#F2F2F7',
+    borderRadius: 8,
+    padding: 12,
+    borderLeftWidth: 3,
+    borderLeftColor: '#34C759',
+  },
+  expectedTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#1C1C1E',
+    marginBottom: 6,
+  },
+  expectedBody: {
+    fontSize: 12,
+    color: '#636366',
+    lineHeight: 18,
+  },
+  syntheticBanner: {
+    backgroundColor: '#FF9F0A18',
+    borderRadius: 8,
+    padding: 10,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#FF9F0A40',
+  },
+  syntheticBannerText: {
+    fontSize: 12,
+    color: '#B45309',
+    lineHeight: 17,
   },
   emptyHint: {
     paddingVertical: 16,

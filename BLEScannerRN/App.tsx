@@ -11,7 +11,8 @@
  *   Tab 2 "Kalman"   — Kalman filter test screen with adjustable params and chart
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import * as SplashScreen from 'expo-splash-screen';
 import {
   View,
   Text,
@@ -26,6 +27,9 @@ import { useDemoScanner } from './src/hooks/useDemoScanner';
 import { DeviceCard } from './src/components/DeviceCard';
 import { KalmanTestScreen } from './src/screens/KalmanTestScreen';
 import { BLEDeviceInfo } from './src/utils/types';
+
+/** Keep splash visible until JS is ready, then hide (avoids stuck splash on slow devices). */
+void SplashScreen.preventAutoHideAsync().catch(() => undefined);
 
 type Tab = 'scanner' | 'kalman';
 
@@ -54,8 +58,12 @@ export default function App() {
 
   const [activeTab, setActiveTab] = useState<Tab>('scanner');
 
+  useEffect(() => {
+    SplashScreen.hideAsync().catch(() => undefined);
+  }, []);
+
   // Show an alert when Bluetooth is detected as powered off (live mode only).
-  React.useEffect(() => {
+  useEffect(() => {
     if (bluetoothOff) {
       Alert.alert(
         'Bluetooth is Turned Off',
@@ -84,7 +92,8 @@ export default function App() {
       device={item}
       isSelected={item.id === selectedDeviceId}
       onSelect={() => {
-        setSelectedDeviceId(item.id === selectedDeviceId ? null : item.id);
+        const next = item.id === selectedDeviceId ? null : item.id;
+        setSelectedDeviceId(next);
         setActiveTab('kalman');
       }}
     />
@@ -141,6 +150,51 @@ export default function App() {
         >
           <Text style={[styles.modeButtonText, mode === 'live' && styles.modeButtonTextActive]}>
             📡 Live
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* ── Quick actions: one tap per feature ── */}
+      <View style={styles.quickActions}>
+        <Text style={styles.quickActionsTitle}>Features</Text>
+        <View style={styles.quickActionsRow}>
+          <TouchableOpacity
+            style={styles.quickActionHalf}
+            onPress={() => {
+              setActiveTab('scanner');
+              if (!isScanning) startScanning();
+            }}
+            accessibilityRole="button"
+            accessibilityLabel="Open beacon scanner and start scanning"
+          >
+            <Text style={styles.quickActionIcon}>📡</Text>
+            <Text style={styles.quickActionLabel}>Beacon & RSSI</Text>
+            <Text style={styles.quickActionHint}>List nearby BLE devices with raw and filtered signal</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.quickActionHalf}
+            onPress={() => setActiveTab('kalman')}
+            accessibilityRole="button"
+            accessibilityLabel="Open Kalman filter test screen"
+          >
+            <Text style={styles.quickActionIcon}>📊</Text>
+            <Text style={styles.quickActionLabel}>Kalman lab</Text>
+            <Text style={styles.quickActionHint}>Chart, Q/R tuning, synthetic demo</Text>
+          </TouchableOpacity>
+        </View>
+        <TouchableOpacity
+          style={styles.quickActionFull}
+          onPress={handleToggleScan}
+          accessibilityRole="button"
+          accessibilityLabel={isScanning ? 'Stop scanning' : 'Start scanning'}
+        >
+          <Text style={styles.quickActionFullText}>
+            {isScanning ? '■  Stop scan' : '▶  Start scan'}
+          </Text>
+          <Text style={styles.quickActionFullSub}>
+            {mode === 'demo'
+              ? 'Runs simulated beacons (works in Expo Go)'
+              : 'Uses real Bluetooth (needs a dev build with BLE)'}
           </Text>
         </TouchableOpacity>
       </View>
@@ -315,6 +369,72 @@ const styles = StyleSheet.create({
   modeButtonTextActive: {
     color: '#1C1C1E',
     fontWeight: '600',
+  },
+  // Quick actions (feature buttons)
+  quickActions: {
+    marginHorizontal: 16,
+    marginBottom: 10,
+    padding: 12,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E5E5EA',
+  },
+  quickActionsTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#8E8E93',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    marginBottom: 10,
+  },
+  quickActionsRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 10,
+  },
+  quickActionHalf: {
+    flex: 1,
+    backgroundColor: '#F2F2F7',
+    borderRadius: 10,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#E5E5EA',
+  },
+  quickActionIcon: {
+    fontSize: 22,
+    marginBottom: 6,
+  },
+  quickActionLabel: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#1C1C1E',
+    marginBottom: 4,
+  },
+  quickActionHint: {
+    fontSize: 11,
+    color: '#8E8E93',
+    lineHeight: 15,
+  },
+  quickActionFull: {
+    backgroundColor: '#007AFF12',
+    borderRadius: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderWidth: 1,
+    borderColor: '#007AFF35',
+    alignItems: 'center',
+  },
+  quickActionFullText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#007AFF',
+  },
+  quickActionFullSub: {
+    fontSize: 11,
+    color: '#636366',
+    marginTop: 4,
+    textAlign: 'center',
   },
   // Status bar
   statusBar: {
