@@ -24,7 +24,7 @@ const MAX_HISTORY = 30;
 /** How often (ms) the cleanup timer runs to prune stale devices. */
 const CLEANUP_INTERVAL_MS = 2_000;
 
-export function useBLEScanner() {
+export function useBLEScanner(enabled: boolean = true) {
   // ── Published state ──────────────────────────────────────────────
   const [devices, setDevices] = useState<BLEDeviceInfo[]>([]);
   const [isScanning, setIsScanning] = useState(false);
@@ -192,9 +192,23 @@ export function useBLEScanner() {
   }, []);
 
   // ── Initialization & cleanup ───────────────────────────────────
+  // Only create the native BleManager when this hook is enabled.
+  // This prevents a crash when the native BLE module isn't available
+  // (e.g., running in Expo Go or when Demo mode is active).
   useEffect(() => {
+    if (!enabled) {
+      setStatusMessage('Switch to Live mode to scan');
+      return;
+    }
+
     // Create the BLE manager instance.
-    const manager = new BleManager();
+    let manager: BleManager;
+    try {
+      manager = new BleManager();
+    } catch (e) {
+      setStatusMessage('BLE not available — use a development build');
+      return;
+    }
     managerRef.current = manager;
 
     /**
@@ -245,8 +259,9 @@ export function useBLEScanner() {
       stateSubscription.remove();
       clearInterval(cleanupInterval);
       manager.destroy();
+      managerRef.current = null;
     };
-  }, [requestPermissions, startScanning]);
+  }, [enabled, requestPermissions, startScanning]);
 
   return {
     devices,

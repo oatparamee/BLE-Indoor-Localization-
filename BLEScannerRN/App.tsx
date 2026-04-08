@@ -18,7 +18,6 @@ import {
   FlatList,
   TouchableOpacity,
   StyleSheet,
-  SafeAreaView,
   StatusBar,
   Alert,
 } from 'react-native';
@@ -35,7 +34,9 @@ export default function App() {
   const [mode, setMode] = useState<'demo' | 'live'>('demo');
 
   // Both hooks run, but only the active mode's data is displayed.
-  const live = useBLEScanner();
+  // Pass enabled=false to useBLEScanner in demo mode so it doesn't
+  // try to create a native BleManager (which crashes in Expo Go).
+  const live = useBLEScanner(mode === 'live');
   const demo = useDemoScanner();
 
   // Pick the active scanner based on the current mode.
@@ -90,7 +91,7 @@ export default function App() {
   );
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <View style={styles.safeArea}>
       <StatusBar barStyle="dark-content" backgroundColor="#F2F2F7" />
 
       {/* ── Navigation Bar ── */}
@@ -234,7 +235,7 @@ export default function App() {
           setSelectedDeviceId={setSelectedDeviceId}
         />
       )}
-    </SafeAreaView>
+    </View>
   );
 }
 
@@ -244,6 +245,7 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: '#F2F2F7',
+    paddingTop: StatusBar.currentHeight ?? 44,
   },
   // Navbar
   navbar: {
