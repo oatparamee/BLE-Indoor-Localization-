@@ -4,7 +4,7 @@
     "slug": "ble-scanner-rn",
     "version": "1.0.0",
     "orientation": "portrait",
-
+    "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "splash": {
       "backgroundColor": "#F2F2F7"
@@ -24,6 +24,7 @@
 
     "android": {
       "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#F2F2F7"
       },
       "package": "com.bleindoorlocalization.blescanner",
