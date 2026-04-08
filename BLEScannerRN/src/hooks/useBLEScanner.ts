@@ -18,6 +18,9 @@ import { BLEDeviceInfo } from '../utils/types';
 /** How many seconds before a device is considered stale and removed. */
 const STALE_TIMEOUT_MS = 10_000;
 
+/** Maximum number of RSSI readings to keep per device for charting. */
+const MAX_HISTORY = 30;
+
 /** How often (ms) the cleanup timer runs to prune stale devices. */
 const CLEANUP_INTERVAL_MS = 2_000;
 
@@ -27,6 +30,7 @@ export function useBLEScanner() {
   const [isScanning, setIsScanning] = useState(false);
   const [statusMessage, setStatusMessage] = useState('Initializing...');
   const [bluetoothOff, setBluetoothOff] = useState(false);
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
 
   // ── Refs (persist across renders without causing re-renders) ────
   /** The BLE manager instance — created once and reused. */
@@ -151,14 +155,19 @@ export function useBLEScanner() {
 
       if (existingIndex >= 0) {
         // Update existing device with fresh readings.
+        const existing = updated[existingIndex];
+        const newRssiHistory = [...existing.rssiHistory, rssi].slice(-MAX_HISTORY);
+        const newFilteredHistory = [...existing.filteredHistory, filteredRssi].slice(-MAX_HISTORY);
         updated = [...prev];
         updated[existingIndex] = {
-          ...updated[existingIndex],
+          ...existing,
           rssi,
           filteredRssi,
           lastSeen: Date.now(),
+          rssiHistory: newRssiHistory,
+          filteredHistory: newFilteredHistory,
           // Only update name if we now have a real one.
-          name: deviceName !== 'Unknown' ? deviceName : updated[existingIndex].name,
+          name: deviceName !== 'Unknown' ? deviceName : existing.name,
         };
       } else {
         // Add newly discovered device.
@@ -170,6 +179,8 @@ export function useBLEScanner() {
             rssi,
             filteredRssi,
             lastSeen: Date.now(),
+            rssiHistory: [rssi],
+            filteredHistory: [filteredRssi],
           },
         ];
       }
@@ -244,5 +255,7 @@ export function useBLEScanner() {
     bluetoothOff,
     startScanning,
     stopScanning,
+    selectedDeviceId,
+    setSelectedDeviceId,
   };
 }

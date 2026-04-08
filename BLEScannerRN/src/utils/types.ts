@@ -24,6 +24,12 @@ export interface BLEDeviceInfo {
 
   /** Timestamp (ms) of when this device was last seen. */
   lastSeen: number;
+
+  /** Last 30 raw RSSI readings for chart display. */
+  rssiHistory: number[];
+
+  /** Last 30 Kalman-filtered RSSI readings for chart display. */
+  filteredHistory: number[];
 }
 
 /**
