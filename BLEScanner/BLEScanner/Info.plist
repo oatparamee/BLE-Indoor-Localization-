@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Bluetooth Usage Description -->
+	<!-- This message is shown to the user when the app requests
+	     permission to use Bluetooth. It explains WHY the app needs
+	     Bluetooth access, which is required by Apple's privacy policy. -->
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>This app uses Bluetooth to scan for nearby BLE beacons and display their signal strength (RSSI) in real time for indoor localization purposes.</string>
+
+	<!-- Legacy Bluetooth permission key (iOS 12 and earlier). -->
+	<key>NSBluetoothPeripheralUsageDescription</key>
+	<string>This app uses Bluetooth to scan for nearby BLE beacons and display their signal strength (RSSI) in real time for indoor localization purposes.</string>
+
+	<!-- Enable background BLE scanning so the app continues to
+	     receive advertisements when not in the foreground. -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>bluetooth-central</string>
+	</array>
+</dict>
+</plist>
