@@ -1,0 +1,87 @@
+import React from 'react';
+import {NavigationContainer} from '@react-navigation/native';
+import {createBottomTabNavigator} from '@react-navigation/bottom-tabs';
+import {StatusBar, View, Text, StyleSheet} from 'react-native';
+
+import CalibrationScreen from './src/screens/CalibrationScreen';
+import LiveReadingsScreen from './src/screens/LiveReadingsScreen';
+import PositionScreen from './src/screens/PositionScreen';
+
+const Tab = createBottomTabNavigator();
+
+function TabIcon({label, focused}: {label: string; focused: boolean}) {
+  const icons: Record<string, string> = {
+    Calibration: '⚙',
+    Readings: '📡',
+    Position: '📍',
+  };
+  return (
+    <View style={tabStyles.iconContainer}>
+      <Text style={[tabStyles.icon, focused && tabStyles.iconFocused]}>
+        {icons[label] || '•'}
+      </Text>
+    </View>
+  );
+}
+
+const tabStyles = StyleSheet.create({
+  iconContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  icon: {
+    fontSize: 20,
+    opacity: 0.5,
+  },
+  iconFocused: {
+    opacity: 1.0,
+  },
+});
+
+export default function App() {
+  return (
+    <NavigationContainer>
+      <StatusBar barStyle="light-content" backgroundColor="#0d1117" />
+      <Tab.Navigator
+        screenOptions={{
+          headerStyle: {backgroundColor: '#161b22', borderBottomColor: '#30363d'},
+          headerTintColor: '#e6edf3',
+          tabBarStyle: {
+            backgroundColor: '#161b22',
+            borderTopColor: '#30363d',
+          },
+          tabBarActiveTintColor: '#58a6ff',
+          tabBarInactiveTintColor: '#8b949e',
+        }}>
+        <Tab.Screen
+          name="Calibration"
+          component={CalibrationScreen}
+          options={{
+            tabBarIcon: ({focused}) => (
+              <TabIcon label="Calibration" focused={focused} />
+            ),
+          }}
+        />
+        <Tab.Screen
+          name="Readings"
+          component={LiveReadingsScreen}
+          options={{
+            title: 'Live Readings',
+            tabBarIcon: ({focused}) => (
+              <TabIcon label="Readings" focused={focused} />
+            ),
+          }}
+        />
+        <Tab.Screen
+          name="Position"
+          component={PositionScreen}
+          options={{
+            tabBarIcon: ({focused}) => (
+              <TabIcon label="Position" focused={focused} />
+            ),
+          }}
+        />
+      </Tab.Navigator>
+    </NavigationContainer>
+  );
+}
