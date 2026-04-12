@@ -1,7 +1,7 @@
-import {API_BASE_URL} from '../config/api';
+import {getApiUrl} from '../config/api';
 
 async function post(path: string, body: object) {
-  const res = await fetch(`${API_BASE_URL}${path}`, {
+  const res = await fetch(`${getApiUrl()}${path}`, {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(body),
@@ -10,7 +10,7 @@ async function post(path: string, body: object) {
 }
 
 async function get(path: string) {
-  const res = await fetch(`${API_BASE_URL}${path}`, {method: 'GET'});
+  const res = await fetch(`${getApiUrl()}${path}`, {method: 'GET'});
   return res.json();
 }
 

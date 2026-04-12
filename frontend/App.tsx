@@ -1,11 +1,13 @@
-import React from 'react';
+import React, {useEffect, useState} from 'react';
 import {NavigationContainer} from '@react-navigation/native';
 import {createBottomTabNavigator} from '@react-navigation/bottom-tabs';
-import {StatusBar, View, Text, StyleSheet} from 'react-native';
+import {StatusBar, View, Text, StyleSheet, ActivityIndicator} from 'react-native';
+import {loadApiUrl} from './src/config/api';
 
 import CalibrationScreen from './src/screens/CalibrationScreen';
 import LiveReadingsScreen from './src/screens/LiveReadingsScreen';
 import PositionScreen from './src/screens/PositionScreen';
+import SettingsScreen from './src/screens/SettingsScreen';
 
 const Tab = createBottomTabNavigator();
 
@@ -14,6 +16,7 @@ function TabIcon({label, focused}: {label: string; focused: boolean}) {
     Calibration: '⚙',
     Readings: '📡',
     Position: '📍',
+    Settings: '🔧',
   };
   return (
     <View style={tabStyles.iconContainer}>
@@ -39,6 +42,20 @@ const tabStyles = StyleSheet.create({
 });
 
 export default function App() {
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    loadApiUrl().then(() => setReady(true));
+  }, []);
+
+  if (!ready) {
+    return (
+      <View style={{flex: 1, backgroundColor: '#0d1117', justifyContent: 'center', alignItems: 'center'}}>
+        <ActivityIndicator size="large" color="#58a6ff" />
+      </View>
+    );
+  }
+
   return (
     <NavigationContainer>
       <StatusBar barStyle="light-content" backgroundColor="#0d1117" />
@@ -78,6 +95,15 @@ export default function App() {
           options={{
             tabBarIcon: ({focused}) => (
               <TabIcon label="Position" focused={focused} />
+            ),
+          }}
+        />
+        <Tab.Screen
+          name="Settings"
+          component={SettingsScreen}
+          options={{
+            tabBarIcon: ({focused}) => (
+              <TabIcon label="Settings" focused={focused} />
             ),
           }}
         />

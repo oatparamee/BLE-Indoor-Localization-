@@ -16,7 +16,8 @@
     "@react-navigation/bottom-tabs": "^7.2.0",
     "react-native-screens": "^4.4.0",
     "react-native-safe-area-context": "^5.1.0",
-    "@react-native-community/slider": "^4.5.5"
+    "@react-native-community/slider": "^4.5.5",
+    "@react-native-async-storage/async-storage": "^2.1.2"
   },
   "devDependencies": {
     "@babel/core": "^7.26.0",
