@@ -9,7 +9,7 @@
     "splash": {
       "backgroundColor": "#F2F2F7"
     },
-    "newArchEnabled": true,
+    "newArchEnabled": false,
 
     "ios": {
       "supportsTablet": true,
@@ -43,15 +43,14 @@
         {
           "isBackgroundEnabled": true,
           "modes": ["central"],
-          "bluetoothAlwaysPermission": "This app uses Bluetooth to scan for nearby BLE beacons and display their signal strength in real time.",
-          "bluetoothPeripheralPermission": "This app uses Bluetooth to scan for nearby BLE beacons and display their signal strength in real time."
+          "bluetoothAlwaysPermission": "This app uses Bluetooth to scan for nearby BLE beacons and display their signal strength in real time."
         }
       ],
       [
         "expo-build-properties",
         {
           "android": {
-            "minSdkVersion": 23
+            "minSdkVersion": 24
           }
         }
       ]
