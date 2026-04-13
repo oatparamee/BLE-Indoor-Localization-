@@ -4,37 +4,37 @@
  * ==========================================================================
  *   HOW TO CHANGE OR ADD BEACONS:
  *     1. Edit the BEACONS object below — each key is the beacon name
- *        (must match the BLE advertised name exactly).
- *     2. Set txPower to the RSSI measured at 1 meter from that beacon.
- *     3. Set x and y to the beacon's real position in meters.
- *     4. You can add as many beacons as you want.
- *     5. After editing here, also update the matching config in the
+ *        (must match the BLE advertised name EXACTLY as your ESP32 broadcasts it).
+ *     2. Set x and y to the beacon's real position in meters.
+ *     3. You can add as many beacons as you want — the system auto-detects
+ *        any BLE device whose name matches a key in this object.
+ *     4. After editing here, also update the matching config in the
  *        Flask backend at: backend/config.py
  *
- *   HOW TO CHANGE THE PATH LOSS EXPONENT (N):
- *     - N depends on your environment (walls, furniture, etc.)
- *     - Typical range: 2.0 (open air) to 4.0 (heavy walls)
+ *   FORMULA:  d = 10 ^ ((RSSI_D0 - RSSI) / (10 * N))
+ *     - RSSI_D0: reference RSSI at 1 meter (single global value, not per-beacon)
+ *     - N: path loss exponent (single global value)
+ *     - Change both below AND in backend/config.py to keep them in sync.
  * ==========================================================================
  */
 
 export interface BeaconConfig {
-  txPower: number;
   x: number;
   y: number;
 }
 
 // Replace with real measurements later
 export const BEACONS: Record<string, BeaconConfig> = {
-  Beacon_A: {txPower: -59, x: 0, y: 0},
-  Beacon_B: {txPower: -59, x: 6, y: 0},
-  Beacon_C: {txPower: -59, x: 3, y: 5},
+  Beacon_A: {x: 0, y: 0},
+  Beacon_B: {x: 6, y: 0},
+  Beacon_C: {x: 3, y: 5},
 };
 
-// Path loss exponent — replace with real measurements later
-export const N = 2.7;
+// Reference RSSI at d0 = 1 meter — replace with real measurements later
+export const RSSI_D0 = -59;
 
-// Path loss exponent used for RSSI-to-distance conversion
-export const N_DISTANCE = 1.2298;
+// Path loss exponent — replace with real measurements later
+export const N = 1.2298;
 
 export const BEACON_NAMES = Object.keys(BEACONS);
 

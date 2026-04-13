@@ -17,7 +17,7 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
-from config import BEACONS, N, N_DISTANCE
+from config import BEACONS, RSSI_D0, N
 from calibration import CalibrationStore
 from kalman_filter import AdaptiveKalmanFilter
 from trilateration import trilaterate
@@ -147,7 +147,7 @@ if __name__ == "__main__":
     print("=" * 60)
     print("  BLE Indoor Localization Backend")
     print(f"  Beacons: {list(BEACONS.keys())}")
-    print(f"  Path loss N (trilateration): {N}")
-    print(f"  Path loss N (distance calc): {N_DISTANCE}")
+    print(f"  RSSI_D0 (ref at 1m): {RSSI_D0}")
+    print(f"  N (path loss exponent): {N}")
     print("=" * 60)
     app.run(host="0.0.0.0", port=5000, debug=True)

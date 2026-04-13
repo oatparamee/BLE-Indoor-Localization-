@@ -1,21 +1,23 @@
 """
 Trilateration using least-squares linearization.
 
+Formula: d = 10 ^ ((RSSI_D0 - RSSI) / (10 * N))
+
 Supports 3 or more beacons. With exactly 3 beacons the system is
 fully determined; with more it is over-determined and numpy.linalg.lstsq
 finds the best fit.
 """
 
 import numpy as np
-from config import BEACONS, N_DISTANCE
+from config import BEACONS, RSSI_D0, N
 
 
-def rssi_to_distance(rssi, tx_power, n=N_DISTANCE):
-    """Convert RSSI to distance in meters using the log-distance path loss model.
-    distance = 10 ^ ((txPower - rssi) / (10 * n))
+def rssi_to_distance(rssi):
+    """Convert RSSI to distance in meters.
+    d = 10 ^ ((RSSI_D0 - RSSI) / (10 * N))
     Clamp minimum to 0.1 m.
     """
-    exponent = (tx_power - rssi) / (10.0 * n)
+    exponent = (RSSI_D0 - rssi) / (10.0 * N)
     distance = 10.0 ** exponent
     return max(distance, 0.1)
 
@@ -38,7 +40,7 @@ def trilaterate(rssi_readings: dict):
     for name in beacon_names:
         b = BEACONS[name]
         rssi = rssi_readings[name]
-        d = rssi_to_distance(rssi, b["txPower"])
+        d = rssi_to_distance(rssi)
         positions.append([b["x"], b["y"]])
         distances.append(d)
         distances_dict[name] = round(d, 4)
@@ -46,10 +48,6 @@ def trilaterate(rssi_readings: dict):
     positions = np.array(positions, dtype=float)
     distances = np.array(distances, dtype=float)
 
-    # Linearize by subtracting the last equation from each prior equation.
-    # For each pair (i, last):
-    #   2(x_last - x_i)*X + 2(y_last - y_i)*Y
-    #     = d_i^2 - d_last^2 - x_i^2 + x_last^2 - y_i^2 + y_last^2
     n = len(positions)
     ref = n - 1
     x_ref, y_ref = positions[ref]

@@ -19,7 +19,7 @@ import {
 } from 'react-native';
 import Slider from '@react-native-community/slider';
 import {bleScanner, BeaconReading} from '../services/bleScanner';
-import {BEACON_NAMES, BEACONS} from '../config/beacons';
+import {BEACONS} from '../config/beacons';
 import {api} from '../services/api';
 
 interface PositionData {
@@ -67,7 +67,7 @@ export default function PositionScreen() {
     setError('');
     setStatusMsg('Starting BLE scan...');
 
-    await bleScanner.startScanning(newReadings => {
+    await bleScanner.startScanning((newReadings, _nearby) => {
       readingsRef.current = newReadings;
     });
 
@@ -75,9 +75,8 @@ export default function PositionScreen() {
       const readings = readingsRef.current;
       const rssiMap: Record<string, number> = {};
 
-      for (const name of BEACON_NAMES) {
-        const beacon = readings[name];
-        if (beacon?.active && beacon.smoothedRssi !== null) {
+      for (const [name, beacon] of Object.entries(readings)) {
+        if (name in BEACONS && beacon?.active && beacon.smoothedRssi !== null) {
           rssiMap[name] = beacon.smoothedRssi;
         }
       }

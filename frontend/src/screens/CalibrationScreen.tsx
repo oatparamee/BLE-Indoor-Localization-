@@ -17,9 +17,9 @@ import {
   StyleSheet,
   Alert,
 } from 'react-native';
-import {bleScanner, BeaconReading} from '../services/bleScanner';
+import {bleScanner, BeaconReading, NearbyDevice} from '../services/bleScanner';
 import {api} from '../services/api';
-import {BEACON_NAMES} from '../config/beacons';
+import {BEACONS} from '../config/beacons';
 
 interface AnalysisResult {
   sample_count: number;
@@ -39,7 +39,8 @@ export default function CalibrationScreen() {
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
   const [kalmanInitialized, setKalmanInitialized] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
-  const [selectedBeacon, setSelectedBeacon] = useState(BEACON_NAMES[0]);
+  const [selectedBeacon, setSelectedBeacon] = useState(Object.keys(BEACONS)[0] || '');
+  const [detectedBeacons, setDetectedBeacons] = useState<string[]>(Object.keys(BEACONS));
 
   const collectIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const beaconReadingsRef = useRef<Record<string, BeaconReading>>({});
@@ -63,8 +64,14 @@ export default function CalibrationScreen() {
       // Ignore reset errors
     }
 
-    bleScanner.startScanning(readings => {
+    bleScanner.startScanning((readings, nearby) => {
       beaconReadingsRef.current = readings;
+      const configuredNames = Object.keys(BEACONS);
+      const activeNames = nearby
+        .filter(d => configuredNames.includes(d.name))
+        .map(d => d.name);
+      const allNames = [...new Set([...configuredNames, ...activeNames])];
+      setDetectedBeacons(allNames);
     });
 
     let count = 0;
@@ -148,7 +155,7 @@ export default function CalibrationScreen() {
       <View style={styles.section}>
         <Text style={styles.label}>Select Beacon:</Text>
         <View style={styles.beaconSelector}>
-          {BEACON_NAMES.map(name => (
+          {detectedBeacons.map(name => (
             <TouchableOpacity
               key={name}
               style={[

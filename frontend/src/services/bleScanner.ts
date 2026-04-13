@@ -1,16 +1,18 @@
 /**
  * BLE Scanner Service
  *
- * Uses react-native-ble-plx to actively scan for BLE beacons.
- * Maintains a rolling buffer of RSSI readings per beacon,
- * computes a smoothed (averaged) RSSI, and tracks whether
- * each beacon is ACTIVE or LOST.
+ * Scans ALL nearby BLE devices. Any device whose name matches
+ * a key in the BEACONS config is treated as a known beacon
+ * and gets RSSI buffering, smoothing, and distance calculation.
+ *
+ * Devices not in the config are still shown in the nearby list
+ * so you can discover what your ESP32s are broadcasting.
  */
 
 import {BleManager, Device, State} from 'react-native-ble-plx';
 import {PermissionsAndroid, Platform} from 'react-native';
 import {
-  BEACON_NAMES,
+  BEACONS,
   RSSI_BUFFER_SIZE,
   BEACON_LOST_TIMEOUT_MS,
 } from '../config/beacons';
@@ -24,22 +26,33 @@ export interface BeaconReading {
   rssiBuffer: number[];
 }
 
-type ScanCallback = (readings: Record<string, BeaconReading>) => void;
+export interface NearbyDevice {
+  id: string;
+  name: string;
+  rssi: number | null;
+  lastSeen: number;
+  isConfigured: boolean;
+}
+
+type ScanCallback = (
+  readings: Record<string, BeaconReading>,
+  nearby: NearbyDevice[],
+) => void;
 
 class BLEScanner {
   private manager: BleManager;
   private readings: Record<string, BeaconReading> = {};
+  private nearbyDevices: Map<string, NearbyDevice> = new Map();
   private callback: ScanCallback | null = null;
   private scanning = false;
   private updateInterval: ReturnType<typeof setInterval> | null = null;
 
   constructor() {
     this.manager = new BleManager();
-    this._initReadings();
   }
 
-  private _initReadings() {
-    for (const name of BEACON_NAMES) {
+  private _getOrCreateReading(name: string): BeaconReading {
+    if (!this.readings[name]) {
       this.readings[name] = {
         name,
         rawRssi: null,
@@ -49,6 +62,7 @@ class BLEScanner {
         rssiBuffer: [],
       };
     }
+    return this.readings[name];
   }
 
   async requestPermissions(): Promise<boolean> {
@@ -91,32 +105,39 @@ class BLEScanner {
     this.scanning = true;
 
     this.manager.startDeviceScan(null, {allowDuplicates: true}, (_error, device) => {
-      if (!device || !device.name) {
+      if (!device) {
         return;
       }
-      this._handleDevice(device);
+      const name = device.name || device.localName;
+      if (!name) {
+        return;
+      }
+
+      const isConfigured = name in BEACONS;
+      this.nearbyDevices.set(device.id, {
+        id: device.id,
+        name,
+        rssi: device.rssi,
+        lastSeen: Date.now(),
+        isConfigured,
+      });
+
+      if (isConfigured && device.rssi !== null && device.rssi !== undefined) {
+        this._updateBeaconReading(name, device.rssi);
+      }
     });
 
     this.updateInterval = setInterval(() => {
       this._checkLostBeacons();
+      this._pruneNearbyDevices();
       if (this.callback) {
-        this.callback({...this.readings});
+        this.callback({...this.readings}, this._getNearbyList());
       }
     }, 1000);
   }
 
-  private _handleDevice(device: Device) {
-    const name = device.name || device.localName;
-    if (!name || !BEACON_NAMES.includes(name)) {
-      return;
-    }
-
-    const rssi = device.rssi;
-    if (rssi === null || rssi === undefined) {
-      return;
-    }
-
-    const beacon = this.readings[name];
+  private _updateBeaconReading(name: string, rssi: number) {
+    const beacon = this._getOrCreateReading(name);
     beacon.rawRssi = rssi;
     beacon.lastSeen = Date.now();
     beacon.active = true;
@@ -132,12 +153,25 @@ class BLEScanner {
 
   private _checkLostBeacons() {
     const now = Date.now();
-    for (const name of BEACON_NAMES) {
-      const beacon = this.readings[name];
+    for (const beacon of Object.values(this.readings)) {
       if (beacon.lastSeen > 0 && now - beacon.lastSeen > BEACON_LOST_TIMEOUT_MS) {
         beacon.active = false;
       }
     }
+  }
+
+  private _pruneNearbyDevices() {
+    const cutoff = Date.now() - 10000;
+    for (const [id, dev] of this.nearbyDevices) {
+      if (dev.lastSeen < cutoff) {
+        this.nearbyDevices.delete(id);
+      }
+    }
+  }
+
+  private _getNearbyList(): NearbyDevice[] {
+    return Array.from(this.nearbyDevices.values())
+      .sort((a, b) => (b.rssi ?? -999) - (a.rssi ?? -999));
   }
 
   stopScanning() {
