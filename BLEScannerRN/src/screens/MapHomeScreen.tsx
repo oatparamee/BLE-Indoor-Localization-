@@ -74,6 +74,7 @@ export function MapHomeScreen({
   const [searchMode, setSearchMode] = useState<'map' | 'destination'>(
     selectedMap ? 'destination' : 'map'
   );
+  const [bottomSheetExpanded, setBottomSheetExpanded] = useState(false);
   const trimmedMapSearch = mapSearchQuery.trim();
   const trimmedRoomSearch = roomSearchQuery.trim();
   const showingMapResults = !isNavigating && (!selectedMap || searchMode === 'map');
@@ -89,12 +90,30 @@ export function MapHomeScreen({
       : `Search destination in ${selectedMap.name}`;
   const currentInstruction =
     destination?.routeSteps[Math.min(activeStepIndex, destination.routeSteps.length - 1)] ?? '';
+  const collapsedPillTitle = !selectedMap
+    ? 'Choose a demo map'
+    : destination
+      ? destination.name
+      : showingRoomResults
+        ? `${roomResultsToShow.length} destination results`
+        : 'Quick destinations';
+  const collapsedPillBody = !selectedMap
+    ? 'Tap to pick the map zone'
+    : destination
+      ? `${destination.etaMinutes} min | ${destination.distanceMeters} m | Tap for route`
+      : showingRoomResults
+        ? 'Tap to view matches'
+        : `${selectedMap.name} | Tap to open`;
 
   useEffect(() => {
     if (!selectedMap) {
       setSearchMode('map');
     }
   }, [selectedMap]);
+
+  useEffect(() => {
+    setBottomSheetExpanded(false);
+  }, [selectedMap?.id, isNavigating]);
 
   const focusSearchBar = () => {
     setTimeout(() => {
@@ -245,8 +264,29 @@ export function MapHomeScreen({
           })}
         </View>
 
+        {bottomSheetExpanded && !isNavigating ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Close bottom panel"
+            onPress={() => setBottomSheetExpanded(false)}
+            style={styles.dismissBackdrop}
+          />
+        ) : null}
+
         <View pointerEvents="box-none" style={styles.bottomOverlay}>
-          {isNavigating && destination ? null : !selectedMap ? (
+          {isNavigating && destination ? null : !bottomSheetExpanded ? (
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => setBottomSheetExpanded(true)}
+              style={styles.collapsedPill}
+            >
+              <View style={styles.collapsedPillHandle} />
+              <View style={styles.collapsedPillCopy}>
+                <Text style={styles.collapsedPillTitle}>{collapsedPillTitle}</Text>
+                <Text style={styles.collapsedPillBody}>{collapsedPillBody}</Text>
+              </View>
+            </Pressable>
+          ) : !selectedMap ? (
             <View style={styles.sheet}>
               <View style={styles.sheetHeader}>
                 <View style={styles.sheetCopy}>
@@ -455,6 +495,41 @@ const styles = StyleSheet.create({
   },
   bottomStack: {
     gap: spacing.sm,
+  },
+  dismissBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  collapsedPill: {
+    minHeight: 58,
+    borderRadius: radii.pill,
+    backgroundColor: 'rgba(255,255,255,0.98)',
+    borderWidth: 1,
+    borderColor: '#DCE5EC',
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    ...shadows,
+  },
+  collapsedPillHandle: {
+    width: 38,
+    height: 5,
+    borderRadius: radii.pill,
+    backgroundColor: colors.border,
+  },
+  collapsedPillCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  collapsedPillTitle: {
+    fontSize: typography.section,
+    fontWeight: '800',
+    color: colors.textPrimary,
+  },
+  collapsedPillBody: {
+    fontSize: typography.caption,
+    color: colors.textSecondary,
   },
   guidanceBanner: {
     flexDirection: 'row',
