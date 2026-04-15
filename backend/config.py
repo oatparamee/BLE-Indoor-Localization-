@@ -25,7 +25,7 @@ BEACONS = {
 }
 
 # Reference RSSI at d0 = 1 meter — replace with real measurements later
-RSSI_D0 = -59
+RSSI_D0 = -63
 
 # Path loss exponent — replace with real measurements later
-N = 1.2298
+N = 2.0
