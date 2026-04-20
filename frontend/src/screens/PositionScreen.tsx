@@ -79,22 +79,20 @@ export default function PositionScreen() {
       selectionRef.current = loaded;
     });
 
-    // Start a single BLE scan for the whole lifetime of this screen.
-    // The same scan feeds both the "detected" picker list and the
-    // tracking loop below — no need to start/stop per tracking toggle.
-    bleScanner
-      .startScanning((newReadings, nearby) => {
-        readingsRef.current = newReadings;
-        setDetected(nearby);
-      })
-      .catch(() => {});
+    // Subscribe to the shared scanner for the whole lifetime of this
+    // screen. Using subscribe() (not startScanning) means other screens
+    // like Calibration keep receiving updates too.
+    const unsub = bleScanner.subscribe((newReadings, nearby) => {
+      readingsRef.current = newReadings;
+      setDetected(nearby);
+    });
 
     return () => {
       if (positionIntervalRef.current) {
         clearInterval(positionIntervalRef.current);
         positionIntervalRef.current = null;
       }
-      bleScanner.stopScanning();
+      unsub();
       trackingRef.current = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

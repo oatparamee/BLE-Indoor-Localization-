@@ -24,25 +24,27 @@ export default function LiveReadingsScreen() {
   const [nearbyList, setNearbyList] = useState<BeaconReading[]>([]);
   const [scanning, setScanning] = useState(false);
   const [showOnlyKnown, setShowOnlyKnown] = useState(false);
-  const scanningRef = useRef(false);
+  const unsubRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     return () => {
-      if (scanningRef.current) {
-        bleScanner.stopScanning();
+      if (unsubRef.current) {
+        unsubRef.current();
+        unsubRef.current = null;
       }
     };
   }, []);
 
-  const toggleScanning = async () => {
+  const toggleScanning = () => {
     if (scanning) {
-      bleScanner.stopScanning();
+      if (unsubRef.current) {
+        unsubRef.current();
+        unsubRef.current = null;
+      }
       setScanning(false);
-      scanningRef.current = false;
     } else {
       setScanning(true);
-      scanningRef.current = true;
-      await bleScanner.startScanning((newReadings, nearby) => {
+      unsubRef.current = bleScanner.subscribe((newReadings, nearby) => {
         setReadings({...newReadings});
         setNearbyList(nearby);
       });

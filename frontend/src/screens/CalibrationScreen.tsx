@@ -34,7 +34,8 @@ export default function CalibrationScreen() {
   const [knownDistance, setKnownDistance] = useState('1.0');
   const [collecting, setCollecting] = useState(false);
   const [samplesCollected, setSamplesCollected] = useState(0);
-  const [maxSamples] = useState(30);
+  const [sampleCountInput, setSampleCountInput] = useState('30');
+  const [maxSamples, setMaxSamples] = useState(30);
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
   const [kalmanInitialized, setKalmanInitialized] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
@@ -65,14 +66,25 @@ export default function CalibrationScreen() {
       Alert.alert('Invalid Distance', 'Enter a positive distance in meters.');
       return;
     }
-    if (!selectedIdRef.current) {
+
+    const parsedCount = parseInt(sampleCountInput, 10);
+    if (!Number.isFinite(parsedCount) || parsedCount < 1) {
       Alert.alert(
-        'No Beacon Selected',
-        'Wait for a beacon to appear in the list and tap it first.',
+        'Invalid Sample Count',
+        'Enter a positive integer for the number of samples to collect.',
       );
       return;
     }
 
+    if (!selectedIdRef.current) {
+      Alert.alert(
+        'No Beacon Selected',
+        'Tap one of the detected beacons above so the app knows which one to sample.',
+      );
+      return;
+    }
+
+    setMaxSamples(parsedCount);
     setCollecting(true);
     setSamplesCollected(0);
     setAnalysis(null);
@@ -80,15 +92,10 @@ export default function CalibrationScreen() {
     setStatusMessage('Starting BLE scan for calibration...');
 
     try {
-      await api.calibrateReset();
+      await api.calibrateReset(parsedCount);
     } catch {
       // Ignore reset errors
     }
-
-    bleScanner.startScanning((readings, nearby) => {
-      beaconReadingsRef.current = readings;
-      setDetectedBeacons(nearby);
-    });
 
     let count = 0;
     collectIntervalRef.current = setInterval(async () => {
@@ -106,14 +113,15 @@ export default function CalibrationScreen() {
         const result = await api.calibrateSample(beacon.rawRssi, dist);
         count = result.collected;
         setSamplesCollected(count);
-        setStatusMessage(`Sample ${count}/${maxSamples} — RSSI: ${beacon.rawRssi}`);
+        setStatusMessage(
+          `Sample ${count}/${parsedCount} — RSSI: ${beacon.rawRssi}`,
+        );
 
-        if (result.ready || count >= maxSamples) {
+        if (result.ready || count >= parsedCount) {
           if (collectIntervalRef.current) {
             clearInterval(collectIntervalRef.current);
             collectIntervalRef.current = null;
           }
-          bleScanner.stopScanning();
           setCollecting(false);
           setStatusMessage('Collection complete. Analyzing...');
 
@@ -125,28 +133,30 @@ export default function CalibrationScreen() {
         setStatusMessage(`Error: ${err.message}`);
       }
     }, 1000);
-  }, [knownDistance, maxSamples]);
+  }, [knownDistance, sampleCountInput]);
 
   // Always scan for nearby devices while this screen is mounted so the
   // user can see and pick any BLE beacon (not just the hard-coded names).
+  //
+  // Uses the multi-subscriber API so Position / LiveReadings screens can
+  // also receive updates concurrently. The unsub handle is called on
+  // unmount so the scanner only stops when the LAST screen leaves.
   useEffect(() => {
-    bleScanner
-      .startScanning((readings, nearby) => {
-        beaconReadingsRef.current = readings;
-        setDetectedBeacons(nearby);
-        if (!selectedIdRef.current && nearby.length > 0) {
-          const first = nearby[0];
-          selectedIdRef.current = first.id;
-          setSelectedBeaconId(first.id);
-        }
-      })
-      .catch(() => {});
+    const unsub = bleScanner.subscribe((readings, nearby) => {
+      beaconReadingsRef.current = readings;
+      setDetectedBeacons(nearby);
+      if (!selectedIdRef.current && nearby.length > 0) {
+        const first = nearby[0];
+        selectedIdRef.current = first.id;
+        setSelectedBeaconId(first.id);
+      }
+    });
     return () => {
       if (collectIntervalRef.current) {
         clearInterval(collectIntervalRef.current);
         collectIntervalRef.current = null;
       }
-      bleScanner.stopScanning();
+      unsub();
     };
   }, []);
 
@@ -155,7 +165,6 @@ export default function CalibrationScreen() {
       clearInterval(collectIntervalRef.current);
       collectIntervalRef.current = null;
     }
-    bleScanner.stopScanning();
     setCollecting(false);
     setStatusMessage('Collection stopped.');
   }, []);
@@ -293,16 +302,36 @@ export default function CalibrationScreen() {
       </View>
 
       <View style={styles.section}>
-        <Text style={styles.label}>Known Distance (meters):</Text>
-        <TextInput
-          style={styles.input}
-          value={knownDistance}
-          onChangeText={setKnownDistance}
-          keyboardType="decimal-pad"
-          editable={!collecting}
-          placeholder="e.g. 1.0"
-          placeholderTextColor="#999"
-        />
+        <View style={styles.inlineRow}>
+          <View style={styles.inlineField}>
+            <Text style={styles.label}>Known Distance (meters):</Text>
+            <TextInput
+              style={styles.input}
+              value={knownDistance}
+              onChangeText={setKnownDistance}
+              keyboardType="decimal-pad"
+              editable={!collecting}
+              placeholder="e.g. 1.0"
+              placeholderTextColor="#999"
+            />
+          </View>
+          <View style={styles.inlineField}>
+            <Text style={styles.label}>Number of Samples:</Text>
+            <TextInput
+              style={styles.input}
+              value={sampleCountInput}
+              onChangeText={setSampleCountInput}
+              keyboardType="number-pad"
+              editable={!collecting}
+              placeholder="e.g. 30"
+              placeholderTextColor="#999"
+            />
+          </View>
+        </View>
+        <Text style={styles.hintText}>
+          The app will collect this many RSSI readings and the backend will
+          return the average.
+        </Text>
       </View>
 
       <View style={styles.section}>
@@ -427,7 +456,7 @@ export default function CalibrationScreen() {
           N = ( RSSI(d0) − RSSI(d1) ) / ( 10 · log₁₀(d1 / d0) )
         </Text>
         <Text style={styles.nHint}>
-          Collect 30 samples at two different distances, use the averages as
+          Collect samples at two different distances, use the averages as
           RSSI(d0) and RSSI(d1), and compute N. All four values can also be
           typed in by hand.
         </Text>
@@ -545,6 +574,14 @@ const styles = StyleSheet.create({
     padding: 12,
     fontSize: 16,
     color: '#e6edf3',
+  },
+  inlineRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 6,
+  },
+  inlineField: {
+    flex: 1,
   },
   beaconSelector: {
     flexDirection: 'row',

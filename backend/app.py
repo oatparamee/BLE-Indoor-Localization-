@@ -60,8 +60,18 @@ def calibrate_analyze():
 
 @app.route("/calibrate/reset", methods=["POST"])
 def calibrate_reset():
+    data = request.get_json(silent=True) or {}
+    max_samples = data.get("max_samples")
     calibration.clear()
-    return jsonify({"status": "calibration samples cleared"})
+    if max_samples is not None:
+        try:
+            calibration.set_max_samples(int(max_samples))
+        except (TypeError, ValueError):
+            return jsonify({"error": "max_samples must be a positive integer"}), 400
+    return jsonify({
+        "status": "calibration samples cleared",
+        "max_samples": calibration.max_samples,
+    })
 
 
 # ---------- Kalman Filter ----------

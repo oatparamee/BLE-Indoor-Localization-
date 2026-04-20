@@ -8,8 +8,18 @@ import math
 
 class CalibrationStore:
     def __init__(self, max_samples=30):
-        self.max_samples = max_samples
+        self.max_samples = int(max_samples)
         self.samples = []  # list of {"rssi": float, "distance": float}
+
+    def set_max_samples(self, max_samples):
+        """Reconfigure how many samples this store will collect.
+        Trims any excess samples already in the buffer."""
+        n = int(max_samples)
+        if n < 1:
+            n = 1
+        self.max_samples = n
+        if len(self.samples) > n:
+            self.samples = self.samples[:n]
 
     def add_sample(self, rssi, distance):
         if len(self.samples) < self.max_samples:

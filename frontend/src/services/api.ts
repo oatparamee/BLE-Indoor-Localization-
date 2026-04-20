@@ -32,7 +32,11 @@ export const api = {
 
   calibrateAnalyze: () => get('/calibrate/analyze'),
 
-  calibrateReset: () => post('/calibrate/reset', {}),
+  calibrateReset: (maxSamples?: number) =>
+    post(
+      '/calibrate/reset',
+      maxSamples !== undefined ? {max_samples: maxSamples} : {},
+    ),
 
   kalmanInitialize: (Q: number, R: number) =>
     post('/kalman/initialize', {Q, R}),
