@@ -42,6 +42,15 @@ export default function CalibrationScreen() {
   const [selectedBeaconId, setSelectedBeaconId] = useState<string>('');
   const [detectedBeacons, setDetectedBeacons] = useState<BeaconReading[]>([]);
 
+  // Path-loss-exponent (N) calculator inputs.
+  // Formula:  N = ( RSSI(d0) - RSSI(d1) )  /  ( 10 * log10(d1 / d0) )
+  const [nD0, setND0] = useState('1.0');
+  const [nRssi0, setNRssi0] = useState('');
+  const [nD1, setND1] = useState('2.0');
+  const [nRssi1, setNRssi1] = useState('');
+  const [nResult, setNResult] = useState<number | null>(null);
+  const [nError, setNError] = useState('');
+
   const collectIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const beaconReadingsRef = useRef<Record<string, BeaconReading>>({});
   const selectedIdRef = useRef<string>('');
@@ -169,6 +178,60 @@ export default function CalibrationScreen() {
     }
   }, [analysis]);
 
+  const calculateN = useCallback(() => {
+    const d0 = parseFloat(nD0);
+    const d1 = parseFloat(nD1);
+    const rssi0 = parseFloat(nRssi0);
+    const rssi1 = parseFloat(nRssi1);
+
+    if (!Number.isFinite(d0) || d0 <= 0) {
+      setNError('d0 must be a positive number (meters).');
+      setNResult(null);
+      return;
+    }
+    if (!Number.isFinite(d1) || d1 <= 0) {
+      setNError('d1 must be a positive number (meters).');
+      setNResult(null);
+      return;
+    }
+    if (d0 === d1) {
+      setNError('d0 and d1 must be different distances.');
+      setNResult(null);
+      return;
+    }
+    if (!Number.isFinite(rssi0) || !Number.isFinite(rssi1)) {
+      setNError('RSSI(d0) and RSSI(d1) must both be numbers (dBm).');
+      setNResult(null);
+      return;
+    }
+
+    const denominator = 10 * Math.log10(d1 / d0);
+    if (denominator === 0) {
+      setNError('Cannot divide by zero (log10(d1/d0) is 0).');
+      setNResult(null);
+      return;
+    }
+
+    const n = (rssi0 - rssi1) / denominator;
+    setNError('');
+    setNResult(n);
+  }, [nD0, nD1, nRssi0, nRssi1]);
+
+  const useMeanAs = useCallback(
+    (target: 'd0' | 'd1') => {
+      if (!analysis) return;
+      const mean = String(analysis.mean_rssi);
+      if (target === 'd0') {
+        setNRssi0(mean);
+        setND0(knownDistance);
+      } else {
+        setNRssi1(mean);
+        setND1(knownDistance);
+      }
+    },
+    [analysis, knownDistance],
+  );
+
   const progressPercent = maxSamples > 0 ? (samplesCollected / maxSamples) * 100 : 0;
 
   const noiseLevelColor = (level: string) => {
@@ -274,6 +337,33 @@ export default function CalibrationScreen() {
       {analysis ? (
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Analysis Results</Text>
+
+          <View style={styles.averageBox}>
+            <Text style={styles.averageLabel}>
+              Average RSSI over {analysis.sample_count} samples @{' '}
+              {knownDistance} m
+            </Text>
+            <Text style={styles.averageValue}>
+              {analysis.mean_rssi.toFixed(2)} dBm
+            </Text>
+            <View style={styles.averageButtons}>
+              <TouchableOpacity
+                style={styles.smallButton}
+                onPress={() => useMeanAs('d0')}>
+                <Text style={styles.smallButtonText}>
+                  Use as RSSI(d0)
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.smallButton}
+                onPress={() => useMeanAs('d1')}>
+                <Text style={styles.smallButtonText}>
+                  Use as RSSI(d1)
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+
           <View style={styles.resultRow}>
             <Text style={styles.resultLabel}>Samples:</Text>
             <Text style={styles.resultValue}>{analysis.sample_count}</Text>
@@ -330,6 +420,88 @@ export default function CalibrationScreen() {
           ) : null}
         </View>
       ) : null}
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Path Loss Exponent (N) Calculator</Text>
+        <Text style={styles.nFormula}>
+          N = ( RSSI(d0) − RSSI(d1) ) / ( 10 · log₁₀(d1 / d0) )
+        </Text>
+        <Text style={styles.nHint}>
+          Collect 30 samples at two different distances, use the averages as
+          RSSI(d0) and RSSI(d1), and compute N. All four values can also be
+          typed in by hand.
+        </Text>
+
+        <View style={styles.nRow}>
+          <View style={styles.nField}>
+            <Text style={styles.nLabel}>d0 (m)</Text>
+            <TextInput
+              style={styles.input}
+              value={nD0}
+              onChangeText={setND0}
+              keyboardType="numeric"
+              placeholder="1.0"
+              placeholderTextColor="#6e7681"
+            />
+          </View>
+          <View style={styles.nField}>
+            <Text style={styles.nLabel}>RSSI(d0) (dBm)</Text>
+            <TextInput
+              style={styles.input}
+              value={nRssi0}
+              onChangeText={setNRssi0}
+              keyboardType="numeric"
+              placeholder="-63"
+              placeholderTextColor="#6e7681"
+            />
+          </View>
+        </View>
+
+        <View style={styles.nRow}>
+          <View style={styles.nField}>
+            <Text style={styles.nLabel}>d1 (m)</Text>
+            <TextInput
+              style={styles.input}
+              value={nD1}
+              onChangeText={setND1}
+              keyboardType="numeric"
+              placeholder="2.0"
+              placeholderTextColor="#6e7681"
+            />
+          </View>
+          <View style={styles.nField}>
+            <Text style={styles.nLabel}>RSSI(d1) (dBm)</Text>
+            <TextInput
+              style={styles.input}
+              value={nRssi1}
+              onChangeText={setNRssi1}
+              keyboardType="numeric"
+              placeholder="-75"
+              placeholderTextColor="#6e7681"
+            />
+          </View>
+        </View>
+
+        <TouchableOpacity style={styles.buttonPrimary} onPress={calculateN}>
+          <Text style={styles.buttonText}>Calculate N</Text>
+        </TouchableOpacity>
+
+        {nError ? <Text style={styles.errorText}>{nError}</Text> : null}
+
+        {nResult !== null && !nError ? (
+          <View style={styles.nResultBox}>
+            <Text style={styles.nResultLabel}>Calculated N:</Text>
+            <Text style={styles.nResultValue}>{nResult.toFixed(4)}</Text>
+            <Text style={styles.nResultHint}>
+              Typical indoor range is roughly 1.6 – 4.0. Copy this into{' '}
+              frontend/src/config/beacons.ts and backend/config.py to make
+              it the new path loss exponent.
+            </Text>
+          </View>
+        ) : null}
+      </View>
+
+      <View style={{height: 40}} />
     </ScrollView>
   );
 }
@@ -493,6 +665,102 @@ const styles = StyleSheet.create({
     color: '#3fb950',
     fontSize: 14,
     fontWeight: '500',
+    textAlign: 'center',
+  },
+  averageBox: {
+    backgroundColor: '#0d1117',
+    borderWidth: 1,
+    borderColor: '#1f6feb',
+    borderRadius: 10,
+    padding: 16,
+    marginBottom: 16,
+    alignItems: 'center',
+  },
+  averageLabel: {
+    color: '#8b949e',
+    fontSize: 13,
+    marginBottom: 4,
+    textAlign: 'center',
+  },
+  averageValue: {
+    color: '#58a6ff',
+    fontSize: 32,
+    fontWeight: '700',
+    fontFamily: 'monospace',
+    marginBottom: 12,
+  },
+  averageButtons: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  smallButton: {
+    backgroundColor: '#21262d',
+    borderWidth: 1,
+    borderColor: '#30363d',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 6,
+  },
+  smallButtonText: {
+    color: '#58a6ff',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  nFormula: {
+    color: '#d2a8ff',
+    fontSize: 13,
+    fontFamily: 'monospace',
+    marginBottom: 6,
+  },
+  nHint: {
+    color: '#8b949e',
+    fontSize: 12,
+    lineHeight: 18,
+    marginBottom: 14,
+  },
+  nRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 10,
+  },
+  nField: {
+    flex: 1,
+  },
+  nLabel: {
+    color: '#8b949e',
+    fontSize: 12,
+    marginBottom: 4,
+  },
+  errorText: {
+    color: '#f85149',
+    fontSize: 13,
+    marginTop: 10,
+  },
+  nResultBox: {
+    marginTop: 16,
+    padding: 16,
+    backgroundColor: '#0d2818',
+    borderWidth: 1,
+    borderColor: '#238636',
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  nResultLabel: {
+    color: '#8b949e',
+    fontSize: 13,
+    marginBottom: 4,
+  },
+  nResultValue: {
+    color: '#3fb950',
+    fontSize: 34,
+    fontWeight: '700',
+    fontFamily: 'monospace',
+    marginBottom: 10,
+  },
+  nResultHint: {
+    color: '#8b949e',
+    fontSize: 12,
+    lineHeight: 17,
     textAlign: 'center',
   },
 });
