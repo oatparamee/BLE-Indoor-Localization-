@@ -89,32 +89,80 @@ export default function CalibrationScreen() {
     setSamplesCollected(0);
     setAnalysis(null);
     setKalmanInitialized(false);
-    setStatusMessage('Starting BLE scan for calibration...');
+    setStatusMessage('Resetting backend calibration buffer...');
 
     try {
       await api.calibrateReset(parsedCount);
-    } catch {
-      // Ignore reset errors
+    } catch (err: any) {
+      // Surface reset errors — a stalled reset means the backend is unreachable
+      // and every sample will fail silently otherwise.
+      setStatusMessage(
+        `Warning: could not reset backend (${err?.message || 'unknown'}). Continuing...`,
+      );
     }
 
-    let count = 0;
-    collectIntervalRef.current = setInterval(async () => {
-      const readings = beaconReadingsRef.current;
-      const id = selectedIdRef.current;
-      const beacon = readings[id];
-      const label = beacon?.name || id;
+    setStatusMessage('Waiting for first RSSI reading...');
 
-      if (!beacon || beacon.rawRssi === null) {
-        setStatusMessage(`Waiting for ${label}...`);
+    let count = 0;
+    let inFlight = false;
+
+    const tick = async () => {
+      // Prevent overlapping requests if one backend call takes > 1s.
+      if (inFlight) return;
+
+      // Read directly from the scanner so we don't depend on the other
+      // subscribe callback having fired yet (fixes the "stuck at 0" case
+      // where the ref hadn't been populated before Start was pressed).
+      const liveReadings = bleScanner.getReadings();
+      const id = selectedIdRef.current;
+
+      if (!id) {
+        setStatusMessage('No beacon selected. Tap one in the list above.');
         return;
       }
 
+      const beacon = liveReadings[id] ?? beaconReadingsRef.current[id];
+      const label = beacon?.name || id;
+
+      if (!beacon) {
+        setStatusMessage(
+          `Waiting for beacon ${label} to be detected by the scanner...`,
+        );
+        return;
+      }
+
+      if (beacon.rawRssi === null || beacon.rawRssi === undefined) {
+        setStatusMessage(`Waiting for first RSSI from ${label}...`);
+        return;
+      }
+
+      if (!beacon.active) {
+        setStatusMessage(
+          `${label} currently marked LOST — holding on sending samples.`,
+        );
+        return;
+      }
+
+      inFlight = true;
       try {
         const result = await api.calibrateSample(beacon.rawRssi, dist);
+
+        if (result && typeof result === 'object' && 'error' in result) {
+          setStatusMessage(`Backend error: ${(result as any).error}`);
+          return;
+        }
+
+        if (typeof result?.collected !== 'number') {
+          setStatusMessage(
+            `Unexpected backend response: ${JSON.stringify(result)}`,
+          );
+          return;
+        }
+
         count = result.collected;
         setSamplesCollected(count);
         setStatusMessage(
-          `Sample ${count}/${parsedCount} — RSSI: ${beacon.rawRssi}`,
+          `Sample ${count}/${parsedCount} — RSSI: ${beacon.rawRssi} dBm (${label})`,
         );
 
         if (result.ready || count >= parsedCount) {
@@ -126,13 +174,28 @@ export default function CalibrationScreen() {
           setStatusMessage('Collection complete. Analyzing...');
 
           const analysisResult = await api.calibrateAnalyze();
-          setAnalysis(analysisResult);
-          setStatusMessage('Analysis complete. Review values and apply.');
+          if (analysisResult && (analysisResult as any).error) {
+            setStatusMessage(
+              `Analyze failed: ${(analysisResult as any).error}`,
+            );
+          } else {
+            setAnalysis(analysisResult);
+            setStatusMessage('Analysis complete. Review values and apply.');
+          }
         }
       } catch (err: any) {
-        setStatusMessage(`Error: ${err.message}`);
+        setStatusMessage(
+          `Network error: ${err?.message || err} — check backend URL in Settings.`,
+        );
+      } finally {
+        inFlight = false;
       }
-    }, 1000);
+    };
+
+    // Run the first tick immediately so users see progress within the first
+    // second instead of waiting a full interval.
+    tick();
+    collectIntervalRef.current = setInterval(tick, 1000);
   }, [knownDistance, sampleCountInput]);
 
   // Always scan for nearby devices while this screen is mounted so the
