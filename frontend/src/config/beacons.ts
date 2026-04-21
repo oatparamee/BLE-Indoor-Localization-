@@ -34,7 +34,7 @@ export const BEACONS: Record<string, BeaconConfig> = {
 export const RSSI_D0 = -63;
 
 // Path loss exponent — replace with real measurements later
-export const N = 2.0;
+export const N = 2.3;
 
 export const BEACON_NAMES = Object.keys(BEACONS);
 
