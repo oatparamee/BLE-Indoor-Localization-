@@ -531,11 +531,18 @@ export default function CalibrationScreen() {
     const pxPred = Px + Q;
     const pyPred = Py + Q;
 
-    // Update
+    // Kalman gains
     const Kx = pxPred / (pxPred + R);
     const Ky = pyPred / (pyPred + R);
-    xEst = xEst + Kx * (xRaw - xEst);
-    yEst = yEst + Ky * (yRaw - yEst);
+
+    // FIX 1 — measure innovation BEFORE update
+    const innovX = xRaw - xEst;
+    const innovY = yRaw - yEst;
+    const innov = (innovX ** 2 + innovY ** 2) / 2;
+
+    // Now update
+    xEst = xEst + Kx * innovX;
+    yEst = yEst + Ky * innovY;
     Px = (1 - Kx) * pxPred;
     Py = (1 - Ky) * pyPred;
 
@@ -543,11 +550,12 @@ export default function CalibrationScreen() {
     adaptYEstRef.current = yEst;
     adaptPxRef.current = Px;
     adaptPyRef.current = Py;
-
+    
+    const windowSize = 20;
+    
     // Store innovation (post-update residual, 2D averaged)
-    const innov = ((xRaw - xEst) ** 2 + (yRaw - yEst) ** 2) / 2;
     adaptInnovationsRef.current.push(innov);
-    if (adaptInnovationsRef.current.length > 10) {
+    if (adaptInnovationsRef.current.length > windowSize) {
       adaptInnovationsRef.current.shift();
     }
 
@@ -556,19 +564,19 @@ export default function CalibrationScreen() {
     if (
       phase2Count > 0 &&
       phase2Count % 10 === 0 &&
-      adaptInnovationsRef.current.length === 10
+      adaptInnovationsRef.current.length >= 10
     ) {
-      const actual =
-        adaptInnovationsRef.current.reduce((a, b) => a + b, 0) / 10;
+      const window = adaptInnovationsRef.current;
+      const actual = window.reduce((a,b) => a+b, 0) / window.length;
       const theory = (Px + Py + 2 * R) / 2;
       const ratio = theory > 0 ? actual / theory : 0;
       const lowBound = R * 0.01;
       const highBound = R * 0.1;
 
-      if (ratio > 1.1) {
+      if (ratio > 1.2) {
         Q = Math.min(Q * 1.1, highBound);
         status = 'LAGGING';
-      } else if (ratio < 0.9) {
+      } else if (ratio < 0.8) {
         Q = Math.max(Q * 0.9, lowBound);
         status = 'JUMPY';
       } else {
