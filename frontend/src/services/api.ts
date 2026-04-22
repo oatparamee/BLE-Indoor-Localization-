@@ -1,17 +1,41 @@
 import {getApiUrl} from '../config/api';
 
+async function parseJsonResponse(res: Response) {
+  const text = await res.text();
+
+  let data: any;
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    const snippet = text.slice(0, 160).replace(/\s+/g, ' ').trim();
+    throw new Error(
+      `HTTP ${res.status} ${res.statusText}: expected JSON, got ${snippet || 'empty response'}`,
+    );
+  }
+
+  if (!res.ok) {
+    const message =
+      data?.error ||
+      data?.message ||
+      `HTTP ${res.status} ${res.statusText}`;
+    throw new Error(message);
+  }
+
+  return data;
+}
+
 async function post(path: string, body: object) {
   const res = await fetch(`${getApiUrl()}${path}`, {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(body),
   });
-  return res.json();
+  return parseJsonResponse(res);
 }
 
 async function get(path: string) {
   const res = await fetch(`${getApiUrl()}${path}`, {method: 'GET'});
-  return res.json();
+  return parseJsonResponse(res);
 }
 
 export interface PositionBeaconInput {

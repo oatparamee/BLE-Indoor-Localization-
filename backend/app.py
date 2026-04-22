@@ -163,7 +163,7 @@ def position():
         "distances": distances_dict,
         "raw_position": {"x": round(raw_x, 4), "y": round(raw_y, 4)},
         "smooth_position": {"x": round(smooth_x, 4), "y": round(smooth_y, 4)},
-        "converged": kalman.converged,
+        "converged": bool(kalman.converged),
     })
 
 

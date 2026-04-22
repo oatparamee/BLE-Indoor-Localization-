@@ -121,17 +121,17 @@ class AdaptiveKalmanFilter:
         if len(self.r_history) < 5:
             return False
         last_5 = list(self.r_history)[-5:]
-        return (max(last_5) - min(last_5)) < 0.1
+        return bool((max(last_5) - min(last_5)) < 0.1)
 
     def get_status(self):
         return {
-            "q_value": self.q_base,
+            "q_value": float(self.q_base),
             "r_current": float(self.R[0, 0]),
-            "r_base": self.r_base,
+            "r_base": float(self.r_base),
             "innovation_count": len(self.innovation_window),
             "innovation_history": [iv.tolist() for iv in self.innovation_window],
-            "r_history": list(self.r_history),
-            "converged": self.converged,
+            "r_history": [float(v) for v in self.r_history],
+            "converged": bool(self.converged),
             "initialized": self.initialized,
             "state": self.x.flatten().tolist(),
         }
