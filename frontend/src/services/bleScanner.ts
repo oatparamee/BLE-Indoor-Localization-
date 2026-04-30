@@ -165,6 +165,11 @@ class BLEScanner {
       if (!name) {
         return;
       }
+      // Keep only project beacons: names must start with "BCPro"
+      // (e.g. BCPro_A, BCPro-01, BCProAnything).
+      if (!name.startsWith('BCPro')) {
+        return;
+      }
       if (device.rssi === null || device.rssi === undefined) {
         return;
       }
