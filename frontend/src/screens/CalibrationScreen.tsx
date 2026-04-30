@@ -121,6 +121,9 @@ export default function CalibrationScreen() {
   const [adaptLog, setAdaptLog] = useState<AdaptLogLine[]>([]);
   const [adaptSummary, setAdaptSummary] = useState<AdaptSummary | null>(null);
 
+  const PHASE1_SAMPLE_COUNT = 60;
+  const PHASE1_MAX_RANGE_M = 2.0;
+
   const adaptConfigRef = useRef<AdaptConfig[]>([]);
   const adaptPhaseRef = useRef<1 | 2>(1);
   const adaptCountRef = useRef(0);
@@ -481,21 +484,36 @@ export default function CalibrationScreen() {
       adaptStationaryYRef.current.push(yRaw);
 
       const len = adaptStationaryXRef.current.length;
-      if (len < 30) {
+      if (len < PHASE1_SAMPLE_COUNT) {
         setAdaptMessage(
-          `Stand still. Collecting ${len}/30 readings to calibrate R...`,
+          `Stand still. Collecting ${len}/${PHASE1_SAMPLE_COUNT} readings to calibrate R...`,
         );
         return;
       }
 
       const xs = adaptStationaryXRef.current;
       const ys = adaptStationaryYRef.current;
+
+      // Sanity check: did the user actually stand still?
+      const xRange = Math.max(...xs) - Math.min(...xs);
+      const yRange = Math.max(...ys) - Math.min(...ys);
+      if (xRange > PHASE1_MAX_RANGE_M || yRange > PHASE1_MAX_RANGE_M) {
+        Alert.alert(
+          'Phase 1 failed',
+          `Position varied by ${xRange.toFixed(2)}m × ${yRange.toFixed(2)}m. ` +
+            `That looks like movement, not noise. Restarting Phase 1 — please stand still.`,
+        );
+        adaptStationaryXRef.current = [];
+        adaptStationaryYRef.current = [];
+        adaptCountRef.current = 0;
+        setAdaptReadingCount(0);
+        return;
+      }
+
       const meanX = xs.reduce((a, b) => a + b, 0) / xs.length;
       const meanY = ys.reduce((a, b) => a + b, 0) / ys.length;
-      const varX =
-        xs.reduce((a, b) => a + (b - meanX) ** 2, 0) / xs.length;
-      const varY =
-        ys.reduce((a, b) => a + (b - meanY) ** 2, 0) / ys.length;
+      const varX = xs.reduce((a, b) => a + (b - meanX) ** 2, 0) / xs.length;
+      const varY = ys.reduce((a, b) => a + (b - meanY) ** 2, 0) / ys.length;
       const R = Math.max((varX + varY) / 2, 1e-6);
       const Q = R * 0.01;
 
@@ -503,8 +521,9 @@ export default function CalibrationScreen() {
       adaptQRef.current = Q;
       adaptXEstRef.current = meanX;
       adaptYEstRef.current = meanY;
-      adaptPxRef.current = 1.0;
-      adaptPyRef.current = 1.0;
+      // Initialize P with R — we just measured position uncertainty, so R is the right initial P
+      adaptPxRef.current = R;
+      adaptPyRef.current = R;
       adaptInnovationsRef.current = [];
       adaptPhaseRef.current = 2;
 
@@ -527,20 +546,26 @@ export default function CalibrationScreen() {
     let Px = adaptPxRef.current;
     let Py = adaptPyRef.current;
 
-    // Predict
+    // Predict step
     const pxPred = Px + Q;
     const pyPred = Py + Q;
 
-    // Kalman gains
-    const Kx = pxPred / (pxPred + R);
-    const Ky = pyPred / (pyPred + R);
-
-    // FIX 1 — measure innovation BEFORE update
+    // Innovation BEFORE update
     const innovX = xRaw - xEst;
     const innovY = yRaw - yEst;
-    const innov = (innovX ** 2 + innovY ** 2) / 2;
 
-    // Now update
+    // Innovation covariance
+    const Sx = pxPred + R;
+    const Sy = pyPred + R;
+
+    // Proper 2D NIS — should average to ~2 when filter is well-tuned
+    const nis = (innovX ** 2) / Sx + (innovY ** 2) / Sy;
+
+    // Kalman gains
+    const Kx = pxPred / Sx;
+    const Ky = pyPred / Sy;
+
+    // Update step
     xEst = xEst + Kx * innovX;
     yEst = yEst + Ky * innovY;
     Px = (1 - Kx) * pxPred;
@@ -550,39 +575,42 @@ export default function CalibrationScreen() {
     adaptYEstRef.current = yEst;
     adaptPxRef.current = Px;
     adaptPyRef.current = Py;
-    
+
     const windowSize = 20;
-    
-    // Store innovation (post-update residual, 2D averaged)
-    adaptInnovationsRef.current.push(innov);
+
+    adaptInnovationsRef.current.push(nis);
     if (adaptInnovationsRef.current.length > windowSize) {
       adaptInnovationsRef.current.shift();
     }
 
     let status = adaptStatusRef.current;
-    const phase2Count = n - 30;
+    const phase2Count = n - PHASE1_SAMPLE_COUNT;
     if (
       phase2Count > 0 &&
       phase2Count % 10 === 0 &&
       adaptInnovationsRef.current.length >= 10
     ) {
       const window = adaptInnovationsRef.current;
-      const actual = window.reduce((a,b) => a+b, 0) / window.length;
-      const theory = (Px + Py + 2 * R) / 2;
-      const ratio = theory > 0 ? actual / theory : 0;
+      const meanNis = window.reduce((a, b) => a + b, 0) / window.length;
+      const ratio = meanNis / 2; // 2 = expected NIS for 2D filter
       const lowBound = R * 0.01;
       const highBound = R * 0.1;
 
+      // Dampened update — only move 20% toward target each adjustment
+      const target = Q * ratio;
+      const alpha = 0.2;
+      let newQ = Q + alpha * (target - Q);
+      newQ = Math.max(lowBound, Math.min(highBound, newQ));
+
       if (ratio > 1.2) {
-        Q = Math.min(Q * 1.1, highBound);
         status = 'LAGGING';
       } else if (ratio < 0.8) {
-        Q = Math.max(Q * 0.9, lowBound);
         status = 'JUMPY';
       } else {
         status = 'STABLE';
       }
 
+      Q = newQ;
       adaptQRef.current = Q;
       adaptStatusRef.current = status;
     }
