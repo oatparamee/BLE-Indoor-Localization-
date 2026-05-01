@@ -122,7 +122,11 @@ export default function CalibrationScreen() {
   const [adaptSummary, setAdaptSummary] = useState<AdaptSummary | null>(null);
 
   const PHASE1_SAMPLE_COUNT = 60;
-  const PHASE1_MAX_RANGE_M = 2.0;
+  // Raw RSSI-trilateration is very noisy: a single bad reading can put the
+  // computed position dozens of meters off, even while standing still.
+  // We therefore trim the worst outliers before evaluating standstill.
+  const PHASE1_TRIM_FRACTION = 0.2; // drop top+bottom 20% of x and y readings
+  const PHASE1_MAX_RANGE_M = 6.0; // typical raw indoor swing while standing still
 
   const adaptConfigRef = useRef<AdaptConfig[]>([]);
   const adaptPhaseRef = useRef<1 | 2>(1);
@@ -494,13 +498,28 @@ export default function CalibrationScreen() {
       const xs = adaptStationaryXRef.current;
       const ys = adaptStationaryYRef.current;
 
-      // Sanity check: did the user actually stand still?
-      const xRange = Math.max(...xs) - Math.min(...xs);
-      const yRange = Math.max(...ys) - Math.min(...ys);
+      // Trim the worst outliers separately on each axis. Raw RSSI
+      // trilateration can produce huge spikes (hundreds of meters) for
+      // a single bad reading; the trimmed set represents the user's
+      // actual stationary position much better than the raw min/max.
+      const trim = (arr: number[]) => {
+        const sorted = [...arr].sort((a, b) => a - b);
+        const dropEach = Math.floor(sorted.length * PHASE1_TRIM_FRACTION);
+        const lo = dropEach;
+        const hi = sorted.length - dropEach;
+        return sorted.slice(lo, hi);
+      };
+      const xsTrim = trim(xs);
+      const ysTrim = trim(ys);
+
+      // Sanity check on trimmed range: this rejects real movement
+      // while tolerating raw trilateration noise.
+      const xRange = Math.max(...xsTrim) - Math.min(...xsTrim);
+      const yRange = Math.max(...ysTrim) - Math.min(...ysTrim);
       if (xRange > PHASE1_MAX_RANGE_M || yRange > PHASE1_MAX_RANGE_M) {
         Alert.alert(
           'Phase 1 failed',
-          `Position varied by ${xRange.toFixed(2)}m × ${yRange.toFixed(2)}m. ` +
+          `Trimmed position varied by ${xRange.toFixed(2)}m × ${yRange.toFixed(2)}m. ` +
             `That looks like movement, not noise. Restarting Phase 1 — please stand still.`,
         );
         adaptStationaryXRef.current = [];
@@ -510,10 +529,16 @@ export default function CalibrationScreen() {
         return;
       }
 
-      const meanX = xs.reduce((a, b) => a + b, 0) / xs.length;
-      const meanY = ys.reduce((a, b) => a + b, 0) / ys.length;
-      const varX = xs.reduce((a, b) => a + (b - meanX) ** 2, 0) / xs.length;
-      const varY = ys.reduce((a, b) => a + (b - meanY) ** 2, 0) / ys.length;
+      // Compute mean / variance from the trimmed sets so a single
+      // bad spike does not destroy the calibrated R value.
+      const meanX =
+        xsTrim.reduce((a, b) => a + b, 0) / xsTrim.length;
+      const meanY =
+        ysTrim.reduce((a, b) => a + b, 0) / ysTrim.length;
+      const varX =
+        xsTrim.reduce((a, b) => a + (b - meanX) ** 2, 0) / xsTrim.length;
+      const varY =
+        ysTrim.reduce((a, b) => a + (b - meanY) ** 2, 0) / ysTrim.length;
       const R = Math.max((varX + varY) / 2, 1e-6);
       const Q = R * 0.01;
 

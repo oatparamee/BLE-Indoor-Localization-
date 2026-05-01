@@ -1,7 +1,7 @@
 /**
  * BLE Scanner Service
  *
- * Scans ALL nearby BLE devices that advertise a name. Every named device
+ * Scans ALL nearby BLE devices. Every device
  * is tracked as a BeaconReading (keyed by its stable UUID / device.id),
  * with RSSI buffering, smoothing, and liveness tracking.
  *
@@ -13,7 +13,7 @@
  * stopped when the last listener unsubscribes.
  */
 
-import {BleManager, State} from 'react-native-ble-plx';
+import {BleManager, ScanMode, State} from 'react-native-ble-plx';
 import {PermissionsAndroid, Platform} from 'react-native';
 import {RSSI_BUFFER_SIZE, BEACON_LOST_TIMEOUT_MS} from '../config/beacons';
 
@@ -67,25 +67,36 @@ class BLEScanner {
   }
 
   async requestPermissions(): Promise<boolean> {
-    if (Platform.OS === 'android') {
-      const apiLevel = Platform.Version;
-      if (apiLevel >= 31) {
-        const results = await PermissionsAndroid.requestMultiple([
-          PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
-          PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
-          PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-        ]);
-        return Object.values(results).every(
-          r => r === PermissionsAndroid.RESULTS.GRANTED,
-        );
-      } else {
-        const result = await PermissionsAndroid.request(
-          PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-        );
-        return result === PermissionsAndroid.RESULTS.GRANTED;
-      }
+    if (Platform.OS !== 'android') return true;
+
+    const apiLevel = Platform.Version;
+    if (apiLevel >= 31) {
+      // Android 12+: BLUETOOTH_SCAN is required to start a scan.
+      // BLUETOOTH_CONNECT is only needed to connect to a GATT server, NOT
+      // to scan, so we ask for it but don't fail if denied. ACCESS_FINE_LOCATION
+      // is required when the manifest declares BLUETOOTH_SCAN without the
+      // `neverForLocation` flag — request it just in case.
+      const results = await PermissionsAndroid.requestMultiple([
+        PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
+        PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
+        PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+      ]);
+      const scanGranted =
+        results[PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN] ===
+        PermissionsAndroid.RESULTS.GRANTED;
+      const fineLocationGranted =
+        results[PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION] ===
+        PermissionsAndroid.RESULTS.GRANTED;
+      // Either path is enough on Android 12+: SCAN with neverForLocation,
+      // OR the legacy combo of SCAN + FINE_LOCATION.
+      return scanGranted || fineLocationGranted;
     }
-    return true;
+
+    // Android < 12: only fine location is required for BLE scanning.
+    const result = await PermissionsAndroid.request(
+      PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+    );
+    return result === PermissionsAndroid.RESULTS.GRANTED;
   }
 
   /**
@@ -142,14 +153,29 @@ class BLEScanner {
 
     const permitted = await this.requestPermissions();
     if (!permitted) {
-      console.warn('BLE permissions not granted');
+      console.warn(
+        '[bleScanner] permissions not granted — scan will not start',
+      );
       this.starting = false;
       return;
     }
 
+    // Wait for Bluetooth to be powered on. nRF Connect does the same;
+    // bailing on the very first state poll is what was breaking Android.
     const state = await this.manager.state();
     if (state !== State.PoweredOn) {
-      console.warn('Bluetooth is not powered on, current state:', state);
+      console.warn(
+        `[bleScanner] Bluetooth not on yet (state=${state}), waiting for PoweredOn...`,
+      );
+      const sub = this.manager.onStateChange(s => {
+        if (s === State.PoweredOn) {
+          sub.remove();
+          this.starting = false;
+          this._startUnderlyingScan().catch(err =>
+            console.warn('[bleScanner] re-start failed:', err),
+          );
+        }
+      }, true);
       this.starting = false;
       return;
     }
@@ -157,24 +183,35 @@ class BLEScanner {
     this.scanning = true;
     this.starting = false;
 
-    this.manager.startDeviceScan(null, {allowDuplicates: true}, (_error, device) => {
-      if (!device) {
-        return;
-      }
-      const name = device.name || device.localName;
-      if (!name) {
-        return;
-      }
-      // Keep only project beacons: names must start with "BCPro"
-      // (e.g. BCPro_A, BCPro-01, BCProAnything).
-      if (!name.startsWith('BCPro')) {
-        return;
-      }
-      if (device.rssi === null || device.rssi === undefined) {
-        return;
-      }
-      this._updateBeaconReading(device.id, name, device.rssi);
-    });
+    // Important Android settings:
+    //   scanMode: LowLatency — same setting nRF Connect uses; far better at
+    //     catching custom beacons in busy RF environments than the default
+    //     LowPower mode (which silently drops a lot of advertisements).
+    //   legacyScan defaults to true — leave it alone so we still pick up
+    //     classic-format beacons. Setting it to false would BREAK detection
+    //     of most BLE beacons on Android.
+    this.manager.startDeviceScan(
+      null,
+      {allowDuplicates: true, scanMode: ScanMode.LowLatency},
+      (error, device) => {
+        if (error) {
+          console.warn(
+            `[bleScanner] scan error code=${error.errorCode} reason=${error.reason} message=${error.message}`,
+          );
+          return;
+        }
+        if (!device) return;
+        if (device.rssi === null || device.rssi === undefined) return;
+
+        // Detect ANY nearby BLE device. Keep a readable fallback label
+        // for unnamed advertisements (Android often returns no name on
+        // the first packet, then a name later).
+        const rawName = device.name || device.localName;
+        const trimmed = rawName?.trim();
+        const displayName = trimmed || `Unknown-${device.id.slice(0, 8)}`;
+        this._updateBeaconReading(device.id, displayName, device.rssi);
+      },
+    );
 
     this.updateInterval = setInterval(() => {
       this._checkLostBeacons();
