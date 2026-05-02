@@ -285,6 +285,122 @@ Restart Flask for:
 - `backend/trilateration.py`
 - `backend/config.py`
 
+## Android Phone Setup and Run (Windows)
+
+These are the steps we used to run the app on a physical Android phone.
+
+### 1. Prerequisites
+
+Install:
+
+- Android Studio (for SDK + platform tools)
+- JDK 17 (Temurin/Adoptium recommended)
+- Node.js + npm
+
+In Android Studio, make sure these SDK components are installed:
+
+- Android SDK Platform-Tools (includes `adb`)
+- Android SDK Build-Tools
+- Android SDK Command-line Tools
+
+### 2. Use a local drive path (important)
+
+Builds are much more reliable from a normal local path like:
+
+```text
+D:\dev\BLE-Indoor-Localization-
+```
+
+Avoid building from OneDrive paths, which can cause Gradle lock/cache errors.
+
+### 3. Set environment variables (PowerShell)
+
+Use your SDK path (example shown below):
+
+```powershell
+[Environment]::SetEnvironmentVariable("ANDROID_HOME", "C:\Users\su5ti\AppData\Local\Android\Sdk", "User")
+[Environment]::SetEnvironmentVariable("JAVA_HOME", "C:\Program Files\Eclipse Adoptium\jdk-17*", "User")
+```
+
+Add these to your User `Path`:
+
+```text
+%ANDROID_HOME%\platform-tools
+%ANDROID_HOME%\emulator
+%ANDROID_HOME%\cmdline-tools\latest\bin
+%JAVA_HOME%\bin
+```
+
+Close and reopen terminal after this.
+
+### 4. Authorize your Android device
+
+On phone:
+
+- Enable Developer Options
+- Enable USB debugging
+- Connect USB cable
+- Accept "Allow USB debugging?" prompt
+- If prompted, choose "Always allow from this computer"
+
+On PC (PowerShell):
+
+```powershell
+adb kill-server
+adb start-server
+adb devices
+```
+
+Expected status must be:
+
+```text
+<device_id>    device
+```
+
+If it says `unauthorized`, revoke USB debugging authorizations on phone and reconnect.
+
+### 5. Install frontend dependencies
+
+```powershell
+cd D:\dev\BLE-Indoor-Localization-\frontend
+npm install
+```
+
+### 6. Run app + backend (3 terminals)
+
+Terminal 1 (frontend Metro):
+
+```powershell
+cd D:\dev\BLE-Indoor-Localization-\frontend
+npx react-native start --reset-cache
+```
+
+Terminal 2 (backend):
+
+```powershell
+cd D:\dev\BLE-Indoor-Localization-\backend
+python app.py
+```
+
+Terminal 3 (install on Android):
+
+```powershell
+cd D:\dev\BLE-Indoor-Localization-\frontend
+npx react-native run-android
+```
+
+### 7. Android-specific troubleshooting
+
+- `adb is not recognized`:
+  - `platform-tools` is not on `Path`, or terminal was not restarted.
+- `Device is UNAUTHORIZED` / `No online devices found`:
+  - re-do USB debugging authorization flow on the phone.
+- `listen EADDRINUSE :::8081`:
+  - Metro is already running; keep existing Metro, or stop old process and restart.
+- Gradle metadata/cache lock errors:
+  - stop Java/Gradle daemons, clear local Gradle cache folders, then rebuild.
+  - avoid OneDrive project locations for Android build folders.
+
 ## Backend API Endpoints
 
 ### Health
