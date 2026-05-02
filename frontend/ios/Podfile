@@ -37,6 +37,24 @@ target 'BLEIndoorLocalization' do
       # :ccache_enabled => true
     )
 
+    # Force all Pods to compile with C++20/libc++.
+    # This fixes RCT-Folly/Folly errors like:
+    # '__cplusplus >= 201703L', 'std::bool_constant' missing,
+    # and "'auto' not allowed in template parameter until C++17".
+    installer.pods_project.targets.each do |target|
+      target.build_configurations.each do |config|
+        config.build_settings['CLANG_CXX_LANGUAGE_STANDARD'] = 'c++20'
+        config.build_settings['CLANG_CXX_LIBRARY'] = 'libc++'
+      end
+    end
+
+    # Also set the Pods project-level build settings so the right-side
+    # "Pods" column in Xcode does not remain stuck on GNU++14.
+    installer.pods_project.build_configurations.each do |config|
+      config.build_settings['CLANG_CXX_LANGUAGE_STANDARD'] = 'c++20'
+      config.build_settings['CLANG_CXX_LIBRARY'] = 'libc++'
+    end
+
     # React Native 0.76 generates one Codegen script phase that invokes
     # with-environment.sh without quoting paths. That breaks when the repo path
     # contains spaces, such as this project's "ECE 180" parent folder.
