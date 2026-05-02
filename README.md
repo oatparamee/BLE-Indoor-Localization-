@@ -1,7 +1,5 @@
 
-# BLE-Indoor-Localization-
-=======
-# BLE Indoor Localization System
+# BLE-Indoor-Localization
 
 Indoor positioning using BLE beacons (ESP32) and a phone running a React Native app, with a Flask backend for trilateration and Kalman filtering.
 
