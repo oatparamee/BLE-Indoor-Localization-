@@ -1,4 +1,4 @@
-<<<<<<< HEAD
+
 # BLE-Indoor-Localization-
 =======
 # BLE Indoor Localization System
