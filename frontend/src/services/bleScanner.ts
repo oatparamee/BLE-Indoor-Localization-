@@ -17,6 +17,16 @@ import {BleManager, ScanMode, State} from 'react-native-ble-plx';
 import {PermissionsAndroid, Platform} from 'react-native';
 import {RSSI_BUFFER_SIZE, BEACON_LOST_TIMEOUT_MS} from '../config/beacons';
 
+// Known beacon advertising MACs → friendly name.
+// Android only: iOS gets the name from Core Bluetooth's GATT cache.
+// To identify a beacon's advertising MAC: hold the phone touching the beacon,
+// run logcat, find the device with the strongest RSSI (closest to -30).
+const BEACON_NAME_MAP: Record<string, string> = {
+  '33:06:C5:58:E9:53': 'Beacon_A',
+  // '??:??:??:??:??:??': 'Beacon_B',
+  // '??:??:??:??:??:??': 'Beacon_C',
+};
+
 export interface BeaconReading {
   /** Stable BLE device identifier (MAC on Android, system UUID on iOS). */
   id: string;
@@ -201,14 +211,34 @@ class BLEScanner {
           return;
         }
         if (!device) return;
+
+        // When a device is very close, dump everything — this catches the beacon
+        // the moment the user holds the phone against it.
+        if (__DEV__ && Platform.OS === 'android' && device.rssi !== null && device.rssi > -65) {
+          console.log(`[BEACON?] id=${device.id} rssi=${device.rssi}`);
+          console.log(`[BEACON?] mfr=${device.manufacturerData}`);
+          console.log(`[BEACON?] svc=${JSON.stringify(device.serviceUUIDs)}`);
+          console.log(`[BEACON?] name=${device.name} local=${device.localName}`);
+        }
+
         if (device.rssi === null || device.rssi === undefined) return;
 
-        // Detect ANY nearby BLE device. Keep a readable fallback label
-        // for unnamed advertisements (Android often returns no name on
-        // the first packet, then a name later).
+        const upperID = device.id.toUpperCase();
         const rawName = device.name || device.localName;
         const trimmed = rawName?.trim();
-        const displayName = trimmed || `Unknown-${device.id.slice(0, 8)}`;
+
+        // Android: match only MACs listed in BEACON_NAME_MAP (names not in advertisement).
+        // iOS: match by advertised name — Core Bluetooth caches it from GATT.
+        const isBlueCharm =
+          Platform.OS === 'android'
+            ? upperID in BEACON_NAME_MAP
+            : !!trimmed && trimmed.toLowerCase().startsWith('bcpro');
+
+        if (!isBlueCharm) return;
+
+        const displayName =
+          BEACON_NAME_MAP[upperID] ?? trimmed ?? `BCPro-${device.id.slice(-5)}`;
+
         this._updateBeaconReading(device.id, displayName, device.rssi);
       },
     );
