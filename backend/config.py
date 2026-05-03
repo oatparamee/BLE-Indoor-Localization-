@@ -19,9 +19,9 @@
 
 # Replace with real measurements later
 BEACONS = {
-    "Beacon_A": {"x": 0, "y": 0},
-    "Beacon_B": {"x": 6, "y": 0},
-    "Beacon_C": {"x": 3, "y": 5},
+    "BCPro_0": {"x": 0, "y": 0},
+    "BCPro_1": {"x": 6, "y": 0},
+    "BCPro_2": {"x": 3, "y": 5},
 }
 
 # Reference RSSI at d0 = 1 meter — replace with real measurements later
