@@ -148,6 +148,10 @@ export default function CalibrationScreen() {
   // Phase 1 only: previous RSSI values per beacon, used to reject single-frame
   // BLE glitches before they corrupt the stationary calibration.
   const prevRssisRef = useRef<number[] | null>(null);
+  // Counts only successful ticks during Phase 2. We use this (not the
+  // cross-phase tick total) to fire the retune block, so a skipped tick in
+  // Phase 1 or Phase 2 cannot make the retune get permanently out of phase.
+  const phase2TickRef = useRef(0);
 
   useEffect(() => {
     selectedIdRef.current = selectedBeaconId;
@@ -424,6 +428,7 @@ export default function CalibrationScreen() {
     adaptInnovationsRef.current = [];
     adaptStatusRef.current = 'STABLE';
     prevRssisRef.current = null;
+    phase2TickRef.current = 0;
 
     setAdaptPhase(1);
     setAdaptReadingCount(0);
@@ -584,6 +589,7 @@ export default function CalibrationScreen() {
       adaptPyRef.current = R;
       adaptInnovationsRef.current = [];
       adaptPhaseRef.current = 2;
+      phase2TickRef.current = 0;
 
       setAdaptR(R);
       setAdaptQ(Q);
@@ -642,7 +648,8 @@ export default function CalibrationScreen() {
     }
 
     let status = adaptStatusRef.current;
-    const phase2Count = n - PHASE1_SAMPLE_COUNT;
+    phase2TickRef.current += 1;
+    const phase2Count = phase2TickRef.current;
     if (
       phase2Count > 0 &&
       phase2Count % 10 === 0 &&
@@ -651,12 +658,16 @@ export default function CalibrationScreen() {
       const window = adaptInnovationsRef.current;
       const meanNis = window.reduce((a, b) => a + b, 0) / window.length;
       const ratio = meanNis / 2; // 2 = expected NIS for 2D filter
-      const lowBound = R * 0.01;
-      const highBound = R * 0.1;
+      // Wider bounds so a clearly LAGGING filter can actually escape the floor
+      // when R is tiny. R*1.0 as the upper bound prevents Q from overshooting
+      // into completely unphysical "the user teleports each tick" territory.
+      const lowBound = R * 0.001;
+      const highBound = R * 1.0;
 
-      // Dampened update — only move 20% toward target each adjustment
+      // Dampened update — move 50% toward target each adjustment so the user
+      // sees Q react within ~30 seconds of walking, not minutes.
       const target = Q * ratio;
-      const alpha = 0.2;
+      const alpha = 0.5;
       let newQ = Q + alpha * (target - Q);
       newQ = Math.max(lowBound, Math.min(highBound, newQ));
 
