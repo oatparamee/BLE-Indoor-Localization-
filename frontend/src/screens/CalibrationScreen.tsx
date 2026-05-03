@@ -124,9 +124,12 @@ export default function CalibrationScreen() {
   const PHASE1_SAMPLE_COUNT = 60;
   // Raw RSSI-trilateration is very noisy: a single bad reading can put the
   // computed position dozens of meters off, even while standing still.
-  // We therefore trim the worst outliers before evaluating standstill.
-  const PHASE1_TRIM_FRACTION = 0.2; // drop top+bottom 20% of x and y readings
-  const PHASE1_MAX_RANGE_M = 6.0; // typical raw indoor swing while standing still
+  // We therefore trim the worst outliers before evaluating standstill, AND
+  // we reject readings whose RSSI jumps too much between consecutive ticks
+  // (those are almost always BLE glitches, not real motion).
+  const PHASE1_TRIM_FRACTION = 0.35; // drop top+bottom 35% of x and y readings
+  const PHASE1_MAX_RANGE_M = 10.0; // tolerated residual noise after trimming
+  const PHASE1_MAX_RSSI_JUMP = 15; // dBm — anything bigger is treated as a glitch
 
   const adaptConfigRef = useRef<AdaptConfig[]>([]);
   const adaptPhaseRef = useRef<1 | 2>(1);
@@ -142,6 +145,9 @@ export default function CalibrationScreen() {
   const adaptInnovationsRef = useRef<number[]>([]);
   const adaptStatusRef = useRef<AdaptStatus>('STABLE');
   const adaptIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Phase 1 only: previous RSSI values per beacon, used to reject single-frame
+  // BLE glitches before they corrupt the stationary calibration.
+  const prevRssisRef = useRef<number[] | null>(null);
 
   useEffect(() => {
     selectedIdRef.current = selectedBeaconId;
@@ -417,6 +423,7 @@ export default function CalibrationScreen() {
     adaptYEstRef.current = null;
     adaptInnovationsRef.current = [];
     adaptStatusRef.current = 'STABLE';
+    prevRssisRef.current = null;
 
     setAdaptPhase(1);
     setAdaptReadingCount(0);
@@ -452,6 +459,32 @@ export default function CalibrationScreen() {
         return;
       }
       rssis.push(b.rawRssi);
+    }
+
+    // Phase 1 only: reject single-frame BLE glitches that would otherwise
+    // corrupt the stationary calibration. A real walking person's RSSI does
+    // not change by 15+ dBm between consecutive 1 Hz ticks; a momentary
+    // connection drop / packet collision easily can. Phase 2 (Kalman) sees
+    // every reading — that's its job.
+    if (adaptPhaseRef.current === 1) {
+      const prev = prevRssisRef.current;
+      if (prev && prev.length === 3) {
+        for (let i = 0; i < 3; i++) {
+          const delta = rssis[i] - prev[i];
+          if (Math.abs(delta) > PHASE1_MAX_RSSI_JUMP) {
+            setAdaptMessage(
+              `Rejected reading: beacon ${i + 1} RSSI jumped ${delta.toFixed(
+                1,
+              )} dBm (likely BLE glitch)`,
+            );
+            // Update prev so we don't get permanently stuck on a bad streak —
+            // next tick is compared against this one, not the pre-glitch one.
+            prevRssisRef.current = rssis;
+            return;
+          }
+        }
+      }
+      prevRssisRef.current = rssis;
     }
 
     const distances: [number, number, number] = [
@@ -697,7 +730,9 @@ export default function CalibrationScreen() {
     adaptConfigRef.current = parsed;
     resetAdaptState();
     setAdaptRunning(true);
-    setAdaptMessage('Stand still. Collecting 30 readings to calibrate R...');
+    setAdaptMessage(
+      `Stand still. Collecting ${PHASE1_SAMPLE_COUNT} readings to calibrate R...`,
+    );
     adaptiveTick();
     adaptIntervalRef.current = setInterval(adaptiveTick, 1000);
   }, [adaptSlots, adaptiveTick, resetAdaptState]);
