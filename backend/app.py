@@ -22,6 +22,10 @@ from calibration import CalibrationStore
 from kalman_filter import AdaptiveKalmanFilter
 from trilateration import trilaterate, trilaterate_with_positions
 
+# Hysteresis and Dynamic Zone Tracking
+last_active_ids = []
+HYSTERESIS_THRESHOLD = 3.0  # dB margin to prevent "beacon flipping"
+
 app = Flask(__name__)
 CORS(app)
 
@@ -123,48 +127,29 @@ def kalman_reset():
 
 @app.route("/position", methods=["POST"])
 def position():
+    global last_active_ids  # <--- INCLUDED HERE
     data = request.get_json(force=True)
+    all_detected = data.get("beacons", [])
 
-    if not data or not isinstance(data, dict):
+    if len(all_detected) < 3:
+        return jsonify({"error": "Need at least 3 beacons"}), 400
+
+    sorted_beacons = sorted(all_detected, key=lambda x: x['rssi'], reverse=True)
+    top_3 = sorted_beacons[:3]
+    current_ids = [b['id'] for b in top_3]
+    
+    last_active_ids = current_ids # <--- THIS IS YOUR SNIPPET
+    
+    try:
+        distances_dict, raw_x, raw_y = trilaterate_with_positions(top_3)
+        smooth_x, smooth_y = kalman.step([raw_x, raw_y])
+        
         return jsonify({
-            "error": "Send either {\"Beacon_A\": -65, ...} or "
-                     "{\"beacons\": [{\"id\": \"...\", \"x\": 0, \"y\": 0, \"rssi\": -65}, ...]}"
-        }), 400
-
-    # New payload: caller supplies beacons with their positions and RSSI.
-    # This supports ANY 3 BLE devices the app detects, regardless of whether
-    # they match the static BEACONS config on the backend.
-    if "beacons" in data and isinstance(data["beacons"], list):
-        try:
-            distances_dict, raw_x, raw_y = trilaterate_with_positions(data["beacons"])
-        except ValueError as e:
-            return jsonify({
-                "error": str(e),
-                "received": [b.get("id") or b.get("name") for b in data["beacons"] if isinstance(b, dict)],
-            }), 400
-    else:
-        # Legacy payload: flat dict {name: rssi}. Positions come from config.BEACONS.
-        known = {k: v for k, v in data.items() if k in BEACONS}
-        if len(known) < 3:
-            return jsonify({
-                "error": f"Need at least 3 known beacons, got {len(known)}",
-                "received": list(data.keys()),
-                "known": list(known.keys()),
-                "hint": "Send a 'beacons' list to use custom positions.",
-            }), 400
-        try:
-            distances_dict, raw_x, raw_y = trilaterate(known)
-        except ValueError as e:
-            return jsonify({"error": str(e)}), 400
-
-    smooth_x, smooth_y = kalman.step([raw_x, raw_y])
-
-    return jsonify({
-        "distances": distances_dict,
-        "raw_position": {"x": round(raw_x, 4), "y": round(raw_y, 4)},
-        "smooth_position": {"x": round(smooth_x, 4), "y": round(smooth_y, 4)},
-        "converged": bool(kalman.converged),
-    })
+            "active_beacons": current_ids,
+            "smooth_position": {"x": round(smooth_x, 4), "y": round(smooth_y, 4)}
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
 
 
 # ---------- Run ----------
