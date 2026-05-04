@@ -11,10 +11,8 @@ backend/__pycache__/
 __pycache__/
 *.py[cod]
 
-# Android build output
-frontend/android/.gradle/
-frontend/android/build/
-frontend/android/app/build/
+# Android — entire folder managed locally, not tracked
+frontend/android/
 
 # iOS dependencies and build output
 frontend/ios/Pods/

@@ -1,21 +1,3 @@
-/**
- * ==========================================================================
- *   Tab 3 — Position Screen
- * ==========================================================================
- *   Shows raw vs smooth position, Kalman effect, Q/R manual inputs, reset.
- *
- *   Beacon selection:
- *     You can pick ANY 3 BLE beacons detected by the scanner and assign
- *     each one to slot 1 / slot 2 / slot 3 by its UUID (device.id), then
- *     enter that beacon's real (x, y) position in meters. Trilateration
- *     uses those three beacons regardless of their advertised name.
- *
- *   Default beacon config:      frontend/src/config/beacons.ts
- *   Persisted selection store:  frontend/src/config/beaconSelection.ts
- *   Backend position endpoint:  POST /position  (accepts the new payload)
- * ==========================================================================
- */
-
 import React, {useState, useEffect, useRef, useCallback} from 'react';
 import {
   View,
@@ -24,18 +6,10 @@ import {
   ScrollView,
   StyleSheet,
   TextInput,
-  Modal,
 } from 'react-native';
 import {bleScanner, BeaconReading} from '../services/bleScanner';
 import {api, PositionBeaconInput} from '../services/api';
-import {
-  BeaconSelection,
-  BeaconSlot,
-  SLOT_COUNT,
-  getBeaconSelection,
-  loadBeaconSelection,
-  saveBeaconSelection,
-} from '../config/beaconSelection';
+import {loadBeaconConfig, getBeaconConfig} from '../config/beaconConfig';
 
 interface PositionData {
   distances: Record<string, number>;
@@ -43,8 +17,6 @@ interface PositionData {
   smooth_position: {x: number; y: number};
   converged: boolean;
 }
-
-const SLOT_LABELS = ['1st Beacon', '2nd Beacon', '3rd Beacon'];
 
 export default function PositionScreen() {
   const [tracking, setTracking] = useState(false);
@@ -57,34 +29,15 @@ export default function PositionScreen() {
   const [error, setError] = useState('');
   const [statusMsg, setStatusMsg] = useState('');
 
-  const [selection, setSelection] = useState<BeaconSelection>(() =>
-    getBeaconSelection(),
-  );
-  const [detected, setDetected] = useState<BeaconReading[]>([]);
-  const [pickerSlotIndex, setPickerSlotIndex] = useState<number | null>(null);
-
-  const trackingRef = useRef(false);
   const readingsRef = useRef<Record<string, BeaconReading>>({});
-  const selectionRef = useRef<BeaconSelection>(selection);
   const positionIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
-    selectionRef.current = selection;
-  }, [selection]);
-
-  useEffect(() => {
     loadKalmanStatus();
-    loadBeaconSelection().then(loaded => {
-      setSelection(loaded);
-      selectionRef.current = loaded;
-    });
+    loadBeaconConfig();
 
-    // Subscribe to the shared scanner for the whole lifetime of this
-    // screen. Using subscribe() (not startScanning) means other screens
-    // like Calibration keep receiving updates too.
-    const unsub = bleScanner.subscribe((newReadings, nearby) => {
+    const unsub = bleScanner.subscribe(newReadings => {
       readingsRef.current = newReadings;
-      setDetected(nearby);
     });
 
     return () => {
@@ -93,7 +46,6 @@ export default function PositionScreen() {
         positionIntervalRef.current = null;
       }
       unsub();
-      trackingRef.current = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -114,52 +66,38 @@ export default function PositionScreen() {
   };
 
   const startTracking = useCallback(async () => {
-    const filled = selectionRef.current.filter(
-      (s): s is BeaconSlot => s !== null,
-    );
-    if (filled.length < 3) {
-      setError(
-        'Pick 3 beacons (1st, 2nd, 3rd) from the detected list and set their (x, y) positions before tracking.',
-      );
-      return;
-    }
-
     setTracking(true);
-    trackingRef.current = true;
     setError('');
     setStatusMsg('Tracking...');
 
     if (positionIntervalRef.current) {
       clearInterval(positionIntervalRef.current);
     }
+
     positionIntervalRef.current = setInterval(async () => {
       const readings = readingsRef.current;
-      const selNow = selectionRef.current;
+      const config = getBeaconConfig();
       const beaconsPayload: PositionBeaconInput[] = [];
-      const missing: string[] = [];
 
-      for (let i = 0; i < SLOT_COUNT; i++) {
-        const slot = selNow[i];
-        if (!slot) {
-          missing.push(SLOT_LABELS[i]);
-          continue;
-        }
-        const reading = readings[slot.id];
-        if (!reading || !reading.active || reading.smoothedRssi === null) {
-          missing.push(`${SLOT_LABELS[i]} (${slot.name})`);
+      for (const [id, reading] of Object.entries(readings)) {
+        const cfg = config[id];
+        if (!cfg || !reading.active || reading.smoothedRssi === null) {
           continue;
         }
         beaconsPayload.push({
-          id: slot.id,
-          name: slot.name,
-          x: slot.x,
-          y: slot.y,
+          id,
+          name: cfg.name,
+          x: cfg.x,
+          y: cfg.y,
           rssi: reading.smoothedRssi,
         });
       }
 
       if (beaconsPayload.length < 3) {
-        setStatusMsg(`Waiting for: ${missing.join(', ')}`);
+        setStatusMsg(
+          `Waiting for beacons — ${beaconsPayload.length}/3 active. ` +
+            'Configure beacons in the Beacons tab.',
+        );
         return;
       }
 
@@ -182,7 +120,6 @@ export default function PositionScreen() {
 
   const stopTracking = useCallback(() => {
     setTracking(false);
-    trackingRef.current = false;
     if (positionIntervalRef.current) {
       clearInterval(positionIntervalRef.current);
       positionIntervalRef.current = null;
@@ -195,9 +132,7 @@ export default function PositionScreen() {
     setQInput(String(value));
     try {
       await api.kalmanUpdate({Q: value});
-    } catch {
-      // Ignore
-    }
+    } catch {}
   }, []);
 
   const handleRChange = useCallback(async (value: number) => {
@@ -205,9 +140,7 @@ export default function PositionScreen() {
     setRInput(String(value));
     try {
       await api.kalmanUpdate({R: value});
-    } catch {
-      // Ignore
-    }
+    } catch {}
   }, []);
 
   const applyQInput = useCallback(async () => {
@@ -245,32 +178,6 @@ export default function PositionScreen() {
     }
   }, []);
 
-  const updateSlot = useCallback(
-    (index: number, patch: Partial<BeaconSlot> | null) => {
-      setSelection(prev => {
-        const next = prev.slice() as BeaconSelection;
-        if (patch === null) {
-          next[index] = null;
-        } else {
-          const base = prev[index] ?? {id: '', name: '', x: 0, y: 0};
-          next[index] = {...base, ...patch};
-        }
-        selectionRef.current = next;
-        saveBeaconSelection(next).catch(() => {});
-        return next;
-      });
-    },
-    [],
-  );
-
-  const assignDetectedToSlot = useCallback(
-    (index: number, device: BeaconReading) => {
-      updateSlot(index, {id: device.id, name: device.name});
-      setPickerSlotIndex(null);
-    },
-    [updateSlot],
-  );
-
   const rawPos = positionData?.raw_position;
   const smoothPos = positionData?.smooth_position;
 
@@ -281,82 +188,6 @@ export default function PositionScreen() {
     diffY = Math.abs(rawPos.y - smoothPos.y);
   }
 
-  const renderSlot = (slot: BeaconSlot | null, index: number) => {
-    const assignedId = slot?.id;
-    const reading = assignedId ? readingsRef.current[assignedId] : undefined;
-    const live =
-      reading && reading.active && reading.smoothedRssi !== null
-        ? `${reading.smoothedRssi.toFixed(1)} dBm`
-        : '—';
-
-    return (
-      <View key={index} style={styles.slotCard}>
-        <View style={styles.slotHeader}>
-          <Text style={styles.slotTitle}>{SLOT_LABELS[index]}</Text>
-          {slot ? (
-            <TouchableOpacity onPress={() => updateSlot(index, null)}>
-              <Text style={styles.slotClear}>clear</Text>
-            </TouchableOpacity>
-          ) : null}
-        </View>
-
-        <TouchableOpacity
-          style={styles.pickerButton}
-          onPress={() => setPickerSlotIndex(index)}>
-          <Text style={styles.pickerButtonText} numberOfLines={1}>
-            {slot
-              ? `${slot.name}  ·  ${slot.id.substring(0, 17)}`
-              : 'Tap to choose a detected beacon…'}
-          </Text>
-          <Text style={styles.pickerButtonChevron}>›</Text>
-        </TouchableOpacity>
-
-        <View style={styles.coordRow}>
-          <View style={styles.coordField}>
-            <Text style={styles.coordLabel}>x (m)</Text>
-            <TextInput
-              style={styles.coordInput}
-              value={slot ? String(slot.x) : ''}
-              onChangeText={text => {
-                const n = Number(text);
-                updateSlot(index, {
-                  x: Number.isFinite(n) ? n : 0,
-                });
-              }}
-              keyboardType="numeric"
-              placeholder="0"
-              placeholderTextColor="#6e7681"
-            />
-          </View>
-          <View style={styles.coordField}>
-            <Text style={styles.coordLabel}>y (m)</Text>
-            <TextInput
-              style={styles.coordInput}
-              value={slot ? String(slot.y) : ''}
-              onChangeText={text => {
-                const n = Number(text);
-                updateSlot(index, {
-                  y: Number.isFinite(n) ? n : 0,
-                });
-              }}
-              keyboardType="numeric"
-              placeholder="0"
-              placeholderTextColor="#6e7681"
-            />
-          </View>
-          <View style={styles.coordField}>
-            <Text style={styles.coordLabel}>RSSI</Text>
-            <Text style={styles.coordLive}>{live}</Text>
-          </View>
-        </View>
-      </View>
-    );
-  };
-
-  const selectedIds = selection
-    .filter((s): s is BeaconSlot => s !== null)
-    .map(s => s.id);
-
   return (
     <ScrollView style={styles.container}>
       <Text style={styles.title}>Position</Text>
@@ -364,18 +195,11 @@ export default function PositionScreen() {
         Trilateration + Adaptive Kalman smoothing
       </Text>
 
-      <View style={styles.card}>
-        <Text style={styles.cardTitle}>Beacon Selection</Text>
-        <Text style={styles.cardHint}>
-          Pick any 3 detected BLE beacons and assign them as 1st / 2nd / 3rd.
-          The scanner picks them up by UUID — the advertised name doesn't
-          need to match Beacon_A / B / C anymore.
-        </Text>
-        {selection.map((slot, i) => renderSlot(slot, i))}
-      </View>
-
       <TouchableOpacity
-        style={[styles.button, tracking ? styles.buttonStop : styles.buttonStart]}
+        style={[
+          styles.button,
+          tracking ? styles.buttonStop : styles.buttonStart,
+        ]}
         onPress={tracking ? stopTracking : startTracking}>
         <Text style={styles.buttonText}>
           {tracking ? 'Stop Tracking' : 'Start Tracking'}
@@ -407,7 +231,6 @@ export default function PositionScreen() {
                 y: {rawPos?.y.toFixed(4)}
               </Text>
             </View>
-
             <View style={[styles.positionCard, styles.positionCardSmooth]}>
               <Text style={styles.positionLabel}>Smooth Position</Text>
               <Text style={styles.positionCoord}>
@@ -421,14 +244,20 @@ export default function PositionScreen() {
 
           {diffX !== null && diffY !== null ? (
             <View style={styles.card}>
-              <Text style={styles.cardTitle}>Kalman Effect (|raw − smooth|)</Text>
+              <Text style={styles.cardTitle}>
+                Kalman Effect (|raw − smooth|)
+              </Text>
               <View style={styles.row}>
                 <Text style={styles.rowLabel}>Δx:</Text>
-                <Text style={styles.rowValueHighlight}>{diffX.toFixed(4)} m</Text>
+                <Text style={styles.rowValueHighlight}>
+                  {diffX.toFixed(4)} m
+                </Text>
               </View>
               <View style={styles.row}>
                 <Text style={styles.rowLabel}>Δy:</Text>
-                <Text style={styles.rowValueHighlight}>{diffY.toFixed(4)} m</Text>
+                <Text style={styles.rowValueHighlight}>
+                  {diffY.toFixed(4)} m
+                </Text>
               </View>
             </View>
           ) : null}
@@ -504,69 +333,6 @@ export default function PositionScreen() {
       </View>
 
       <View style={{height: 40}} />
-
-      <Modal
-        visible={pickerSlotIndex !== null}
-        animationType="slide"
-        transparent
-        onRequestClose={() => setPickerSlotIndex(null)}>
-        <View style={styles.modalBackdrop}>
-          <View style={styles.modalSheet}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>
-                {pickerSlotIndex !== null
-                  ? `Choose ${SLOT_LABELS[pickerSlotIndex]}`
-                  : ''}
-              </Text>
-              <TouchableOpacity onPress={() => setPickerSlotIndex(null)}>
-                <Text style={styles.modalClose}>close</Text>
-              </TouchableOpacity>
-            </View>
-            <Text style={styles.modalHint}>
-              Showing all BLE devices the scanner sees. Tap one to assign it.
-            </Text>
-            <ScrollView style={styles.modalList}>
-              {detected.length === 0 ? (
-                <Text style={styles.modalEmpty}>
-                  No devices detected yet. Make sure Bluetooth is on and the
-                  beacons are broadcasting.
-                </Text>
-              ) : (
-                detected.map(dev => {
-                  const alreadyTaken =
-                    selectedIds.includes(dev.id) &&
-                    selection[pickerSlotIndex ?? -1]?.id !== dev.id;
-                  return (
-                    <TouchableOpacity
-                      key={dev.id}
-                      style={[
-                        styles.modalRow,
-                        alreadyTaken && styles.modalRowTaken,
-                      ]}
-                      disabled={alreadyTaken}
-                      onPress={() => {
-                        if (pickerSlotIndex !== null) {
-                          assignDetectedToSlot(pickerSlotIndex, dev);
-                        }
-                      }}>
-                      <View style={{flex: 1}}>
-                        <Text style={styles.modalRowName}>{dev.name}</Text>
-                        <Text style={styles.modalRowId}>{dev.id}</Text>
-                      </View>
-                      <Text style={styles.modalRowRssi}>
-                        {dev.rawRssi ?? '?'} dBm
-                      </Text>
-                      {alreadyTaken ? (
-                        <Text style={styles.modalRowBadge}>IN USE</Text>
-                      ) : null}
-                    </TouchableOpacity>
-                  );
-                })
-              )}
-            </ScrollView>
-          </View>
-        </View>
-      </Modal>
     </ScrollView>
   );
 }
@@ -594,12 +360,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 16,
   },
-  buttonStart: {
-    backgroundColor: '#238636',
-  },
-  buttonStop: {
-    backgroundColor: '#da3633',
-  },
+  buttonStart: {backgroundColor: '#238636'},
+  buttonStop: {backgroundColor: '#da3633'},
   buttonDanger: {
     backgroundColor: '#da3633',
     padding: 14,
@@ -636,12 +398,6 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#58a6ff',
     marginBottom: 12,
-  },
-  cardHint: {
-    fontSize: 13,
-    color: '#8b949e',
-    marginBottom: 12,
-    lineHeight: 18,
   },
   row: {
     flexDirection: 'row',
@@ -738,161 +494,5 @@ const styles = StyleSheet.create({
   applyButtonText: {
     color: '#ffffff',
     fontWeight: '600',
-  },
-  slotCard: {
-    backgroundColor: '#0d1117',
-    borderRadius: 10,
-    padding: 12,
-    borderWidth: 1,
-    borderColor: '#30363d',
-    marginBottom: 10,
-  },
-  slotHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  slotTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#d2a8ff',
-  },
-  slotClear: {
-    color: '#f85149',
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  pickerButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#161b22',
-    borderWidth: 1,
-    borderColor: '#30363d',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    marginBottom: 8,
-  },
-  pickerButtonText: {
-    flex: 1,
-    color: '#e6edf3',
-    fontFamily: 'monospace',
-    fontSize: 13,
-  },
-  pickerButtonChevron: {
-    color: '#8b949e',
-    fontSize: 18,
-    marginLeft: 8,
-  },
-  coordRow: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  coordField: {
-    flex: 1,
-  },
-  coordLabel: {
-    color: '#8b949e',
-    fontSize: 12,
-    marginBottom: 4,
-  },
-  coordInput: {
-    backgroundColor: '#161b22',
-    borderWidth: 1,
-    borderColor: '#30363d',
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    height: 36,
-    color: '#e6edf3',
-    fontFamily: 'monospace',
-    fontSize: 13,
-  },
-  coordLive: {
-    color: '#58a6ff',
-    fontFamily: 'monospace',
-    fontSize: 13,
-    paddingTop: 8,
-  },
-  modalBackdrop: {
-    flex: 1,
-    justifyContent: 'flex-end',
-    backgroundColor: 'rgba(0,0,0,0.6)',
-  },
-  modalSheet: {
-    backgroundColor: '#161b22',
-    borderTopLeftRadius: 16,
-    borderTopRightRadius: 16,
-    padding: 16,
-    maxHeight: '80%',
-    borderWidth: 1,
-    borderColor: '#30363d',
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 4,
-  },
-  modalTitle: {
-    color: '#e6edf3',
-    fontSize: 18,
-    fontWeight: '700',
-  },
-  modalClose: {
-    color: '#58a6ff',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  modalHint: {
-    color: '#8b949e',
-    fontSize: 12,
-    marginBottom: 12,
-  },
-  modalList: {
-    maxHeight: 400,
-  },
-  modalEmpty: {
-    color: '#6e7681',
-    fontStyle: 'italic',
-    textAlign: 'center',
-    paddingVertical: 24,
-  },
-  modalRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 10,
-    paddingHorizontal: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: '#21262d',
-    gap: 8,
-  },
-  modalRowTaken: {
-    opacity: 0.4,
-  },
-  modalRowName: {
-    color: '#e6edf3',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  modalRowId: {
-    color: '#6e7681',
-    fontSize: 11,
-    fontFamily: 'monospace',
-    marginTop: 2,
-  },
-  modalRowRssi: {
-    color: '#8b949e',
-    fontFamily: 'monospace',
-    fontSize: 13,
-  },
-  modalRowBadge: {
-    backgroundColor: '#3d1117',
-    color: '#f85149',
-    fontSize: 10,
-    fontWeight: '700',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
   },
 });
