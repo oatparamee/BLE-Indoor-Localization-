@@ -22,9 +22,40 @@ from calibration import CalibrationStore
 from kalman_filter import AdaptiveKalmanFilter
 from trilateration import trilaterate, trilaterate_with_positions
 
-# Hysteresis and Dynamic Zone Tracking
-last_active_ids = []
-HYSTERESIS_THRESHOLD = 3.0  # dB margin to prevent "beacon flipping"
+# Hysteresis: only swap a beacon out of the active set if the challenger
+# is at least this many dB stronger than the weakest currently active beacon.
+last_active_ids: list[str] = []
+HYSTERESIS_THRESHOLD = 3.0
+
+
+def _select_top3_with_hysteresis(all_beacons: list, last_ids: list[str]) -> list:
+    """Return 3 beacons using hysteresis to prevent rapid beacon flipping."""
+    beacon_map = {b["id"]: b for b in all_beacons}
+
+    # Restore previously active beacons that are still visible.
+    active = [beacon_map[bid] for bid in last_ids if bid in beacon_map]
+
+    if len(active) < 3:
+        # No stable history yet — fall back to strongest 3 by RSSI.
+        return sorted(all_beacons, key=lambda b: b["rssi"], reverse=True)[:3]
+
+    active_ids = {b["id"] for b in active}
+    challengers = sorted(
+        [b for b in all_beacons if b["id"] not in active_ids],
+        key=lambda b: b["rssi"],
+        reverse=True,
+    )
+
+    result = list(active)
+    for challenger in challengers:
+        weakest = min(result, key=lambda b: b["rssi"])
+        if challenger["rssi"] > weakest["rssi"] + HYSTERESIS_THRESHOLD:
+            result.remove(weakest)
+            result.append(challenger)
+        else:
+            break  # Remaining challengers are even weaker — stop early.
+
+    return result
 
 app = Flask(__name__)
 CORS(app)
@@ -127,26 +158,26 @@ def kalman_reset():
 
 @app.route("/position", methods=["POST"])
 def position():
-    global last_active_ids  # <--- INCLUDED HERE
+    global last_active_ids
     data = request.get_json(force=True)
     all_detected = data.get("beacons", [])
 
     if len(all_detected) < 3:
         return jsonify({"error": "Need at least 3 beacons"}), 400
 
-    sorted_beacons = sorted(all_detected, key=lambda x: x['rssi'], reverse=True)
-    top_3 = sorted_beacons[:3]
-    current_ids = [b['id'] for b in top_3]
-    
-    last_active_ids = current_ids # <--- THIS IS YOUR SNIPPET
-    
+    top_3 = _select_top3_with_hysteresis(all_detected, last_active_ids)
+    last_active_ids = [b["id"] for b in top_3]
+
     try:
         distances_dict, raw_x, raw_y = trilaterate_with_positions(top_3)
         smooth_x, smooth_y = kalman.step([raw_x, raw_y])
-        
+
         return jsonify({
-            "active_beacons": current_ids,
-            "smooth_position": {"x": round(smooth_x, 4), "y": round(smooth_y, 4)}
+            "distances": distances_dict,
+            "raw_position": {"x": round(raw_x, 4), "y": round(raw_y, 4)},
+            "smooth_position": {"x": round(smooth_x, 4), "y": round(smooth_y, 4)},
+            "converged": kalman.converged,
+            "active_beacons": last_active_ids,
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 400
