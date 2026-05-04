@@ -39,7 +39,7 @@ export const N = 2.3;
 export const BEACON_NAMES = Object.keys(BEACONS);
 
 // Rolling average window size
-export const RSSI_BUFFER_SIZE = 5;
+export const RSSI_BUFFER_SIZE = 10;
 
 // Beacon lost timeout in milliseconds
 export const BEACON_LOST_TIMEOUT_MS = 5000;
