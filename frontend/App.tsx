@@ -6,6 +6,7 @@ import {loadApiUrl} from './src/config/api';
 
 import CalibrationScreen from './src/screens/CalibrationScreen';
 import LiveReadingsScreen from './src/screens/LiveReadingsScreen';
+import SetupScreen from './src/screens/SetupScreen';
 import PositionScreen from './src/screens/PositionScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
 
@@ -15,6 +16,7 @@ function TabIcon({label, focused}: {label: string; focused: boolean}) {
   const icons: Record<string, string> = {
     Calibration: '⚙',
     Readings: '📡',
+    Beacons: '📌',
     Position: '📍',
     Settings: '🔧',
   };
@@ -86,6 +88,16 @@ export default function App() {
             title: 'Live Readings',
             tabBarIcon: ({focused}) => (
               <TabIcon label="Readings" focused={focused} />
+            ),
+          }}
+        />
+        <Tab.Screen
+          name="Beacons"
+          component={SetupScreen}
+          options={{
+            title: 'Beacon Setup',
+            tabBarIcon: ({focused}) => (
+              <TabIcon label="Beacons" focused={focused} />
             ),
           }}
         />
