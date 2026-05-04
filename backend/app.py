@@ -192,4 +192,4 @@ if __name__ == "__main__":
     print(f"  RSSI_D0 (ref at 1m): {RSSI_D0}")
     print(f"  N (path loss exponent): {N}")
     print("=" * 60)
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=5001, debug=True)
