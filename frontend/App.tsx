@@ -8,6 +8,7 @@ import CalibrationScreen from './src/screens/CalibrationScreen';
 import LiveReadingsScreen from './src/screens/LiveReadingsScreen';
 import PositionScreen from './src/screens/PositionScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
+import BoelterNavigationScreen from './src/screens/BoelterNavigationScreen';
 
 const Tab = createBottomTabNavigator();
 
@@ -16,6 +17,7 @@ function TabIcon({label, focused}: {label: string; focused: boolean}) {
     Calibration: '⚙',
     Readings: '📡',
     Position: '📍',
+    Navigation: '🗺',
     Settings: '🔧',
   };
   return (
@@ -95,6 +97,16 @@ export default function App() {
           options={{
             tabBarIcon: ({focused}) => (
               <TabIcon label="Position" focused={focused} />
+            ),
+          }}
+        />
+        <Tab.Screen
+          name="Navigation"
+          component={BoelterNavigationScreen}
+          options={{
+            title: 'Navigation',
+            tabBarIcon: ({focused}) => (
+              <TabIcon label="Navigation" focused={focused} />
             ),
           }}
         />
