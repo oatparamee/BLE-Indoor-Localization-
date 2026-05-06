@@ -8,6 +8,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import Slider from '@react-native-community/slider';
 import Svg, {Path} from 'react-native-svg';
 import {
   CurrentAnchor,
@@ -15,6 +16,7 @@ import {
   IndoorDestination,
   PrototypeMapZone,
 } from '../data/mockIndoorDestinations';
+import type {NavigationRoute, RoutePosition} from '../data/mockRoutes';
 import {IndoorMapPlaceholder} from '../components/IndoorMapPlaceholder';
 import {
   colors,
@@ -71,6 +73,8 @@ interface Props {
   isNavigating: boolean;
   activeStepIndex: number;
   routeProgress: number;
+  navigationRoute: NavigationRoute | null;
+  routePosition: RoutePosition | null;
   onSelectMap: (mapId: string) => void;
   onClearMapSelection: () => void;
   onSelectSource: (destinationId: string) => void;
@@ -78,6 +82,8 @@ interface Props {
   onStartNavigation: () => void;
   onStopNavigation: () => void;
   onRefocusNavigation: () => void;
+  onChangeRouteProgress: (progress: number) => void;
+  onStepRouteProgress: (delta: number) => void;
   mapFocusRequest: number;
 }
 
@@ -92,11 +98,15 @@ export function MapHomeScreen({
   onChangeFloor,
   isNavigating,
   routeProgress,
+  navigationRoute,
+  routePosition,
   onSelectSource,
   onSelectDestination,
   onStartNavigation,
   onStopNavigation,
   onRefocusNavigation,
+  onChangeRouteProgress,
+  onStepRouteProgress,
   mapFocusRequest,
 }: Props) {
   const searchIsActive = roomSearchQuery.trim().length > 0;
@@ -155,8 +165,14 @@ export function MapHomeScreen({
         showRooms
         isNavigating={isNavigating}
         routeProgress={routeProgress}
+        navigationRoute={navigationRoute}
+        routePosition={routePosition}
         onInteractionStart={dismissTransientUi}
-        focusPoint={source?.mapPoint ?? currentAnchor.point}
+        focusPoint={
+          isNavigating
+            ? routePosition?.point ?? source?.mapPoint ?? currentAnchor.point
+            : source?.mapPoint ?? currentAnchor.point
+        }
         focusRequest={mapFocusRequest}
       />
 
@@ -327,6 +343,37 @@ export function MapHomeScreen({
             style={styles.refocusButton}>
             <RefocusArrowIcon />
           </Pressable>
+        </View>
+      ) : null}
+
+      {isNavigating ? (
+        <View pointerEvents="box-none" style={styles.walkControlsOverlay}>
+          <View style={styles.walkControlsPanel}>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => onStepRouteProgress(-7)}
+              style={styles.walkButton}>
+              <Text style={styles.walkButtonText}>Back</Text>
+            </Pressable>
+            <Slider
+              accessibilityLabel="Route walking progress"
+              maximumTrackTintColor="#D7E3E0"
+              maximumValue={100}
+              minimumTrackTintColor={colors.accent}
+              minimumValue={0}
+              onValueChange={onChangeRouteProgress}
+              step={1}
+              style={styles.walkSlider}
+              thumbTintColor={colors.accentStrong}
+              value={routeProgress}
+            />
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => onStepRouteProgress(7)}
+              style={styles.walkButton}>
+              <Text style={styles.walkButtonText}>Forward</Text>
+            </Pressable>
+          </View>
         </View>
       ) : null}
 
@@ -571,6 +618,42 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     ...shadows,
+  },
+  walkControlsOverlay: {
+    position: 'absolute',
+    bottom: 86,
+    left: spacing.md,
+    right: 88,
+  },
+  walkControlsPanel: {
+    minHeight: 48,
+    borderRadius: radii.pill,
+    backgroundColor: 'rgba(255,255,255,0.96)',
+    borderWidth: 1,
+    borderColor: colors.border,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    paddingHorizontal: spacing.xs,
+    ...shadows,
+  },
+  walkButton: {
+    minHeight: 36,
+    minWidth: 64,
+    borderRadius: radii.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surfaceMuted,
+    paddingHorizontal: spacing.sm,
+  },
+  walkButtonText: {
+    color: colors.accentStrong,
+    fontSize: typography.caption,
+    fontWeight: '900',
+  },
+  walkSlider: {
+    flex: 1,
+    height: 34,
   },
   navigationOverlay: {
     position: 'absolute',

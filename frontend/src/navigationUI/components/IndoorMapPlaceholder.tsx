@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, {useCallback, useEffect, useRef, useState} from 'react';
 import {
   GestureResponderEvent,
   LayoutChangeEvent,
@@ -15,9 +15,12 @@ import {
   IndoorDestination,
   MapPoint,
 } from '../data/mockIndoorDestinations';
+import {getRouteSegmentForFloor} from '../data/mockRoutes';
+import type {NavigationRoute, RoutePosition} from '../data/mockRoutes';
 import { radii } from '../theme/tokens';
 import Boelter5FMap from '../../assets/maps/boelter-5f.svg';
 import Boelter8FMap from '../../assets/maps/boelter-8f.svg';
+import Svg, {Circle, G, Path, Polygon} from 'react-native-svg';
 
 interface Props {
   floor: FloorCode;
@@ -27,6 +30,8 @@ interface Props {
   showRooms?: boolean;
   isNavigating: boolean;
   routeProgress: number;
+  navigationRoute?: NavigationRoute | null;
+  routePosition?: RoutePosition | null;
   style?: StyleProp<ViewStyle>;
   onInteractionStart?: () => void;
   focusPoint?: MapPoint | null;
@@ -43,6 +48,8 @@ const FOCUS_ANIMATION_MS = 900;
 const PINCH_ZOOM_RESPONSE = 0.68;
 const ROTATION_DEAD_ZONE_RAD = Math.PI / 12;
 const ROTATION_RESPONSE = 0.55;
+const ROUTE_STROKE_WIDTH = 18;
+const ROUTE_ARROW_SIZE = 50;
 
 const floorMapComponents = {
   '5F': Boelter5FMap,
@@ -159,25 +166,15 @@ function getDampedRotationDelta(angleDelta: number) {
 
 export function IndoorMapPlaceholder({
   floor,
-  currentAnchor,
-  destination,
-  zoneName,
-  showRooms = true,
   isNavigating,
-  routeProgress,
+  navigationRoute = null,
+  routePosition = null,
   style,
   onInteractionStart,
   focusPoint,
   focusRequest = 0,
   focusZoom = DEFAULT_FOCUS_ZOOM,
 }: Props) {
-  void currentAnchor;
-  void destination;
-  void zoneName;
-  void showRooms;
-  void isNavigating;
-  void routeProgress;
-
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const [frameSize, setFrameSize] = useState({
     width: windowWidth,
@@ -208,24 +205,50 @@ export function IndoorMapPlaceholder({
   });
   const renderedMapWidth = mapWidth * SVG_RENDER_ZOOM;
   const renderedMapHeight = mapHeight * SVG_RENDER_ZOOM;
+  const routeSegment = navigationRoute
+    ? getRouteSegmentForFloor(navigationRoute, floor)
+    : null;
 
-  const updateViewState = (nextViewState: MapViewState) => {
+  const getRenderedMapPoint = (point: MapPoint) => ({
+    x: (point.x / 100) * renderedMapWidth,
+    y: (point.y / 100) * renderedMapHeight,
+  });
+
+  const routePath =
+    routeSegment?.points
+      .map((point, index) => {
+        const renderedPoint = getRenderedMapPoint(point);
+        return `${index === 0 ? 'M' : 'L'} ${renderedPoint.x} ${
+          renderedPoint.y
+        }`;
+      })
+      .join(' ') ?? '';
+  const routePointerPoint =
+    isNavigating && routePosition?.floor === floor
+      ? getRenderedMapPoint(routePosition.point)
+      : null;
+  const routePointerRotation =
+    routePosition?.headingRadians === undefined
+      ? 0
+      : (routePosition.headingRadians * 180) / Math.PI;
+
+  const updateViewState = useCallback((nextViewState: MapViewState) => {
     viewStateRef.current = nextViewState;
     mapSurfaceRef.current?.setNativeProps({
       style: {
         transform: getMapTransform(nextViewState),
       },
     });
-  };
+  }, []);
 
-  const cancelFocusAnimation = () => {
+  const cancelFocusAnimation = useCallback(() => {
     if (focusAnimationRef.current !== null) {
       cancelAnimationFrame(focusAnimationRef.current);
       focusAnimationRef.current = null;
     }
-  };
+  }, []);
 
-  const animateViewState = (targetViewState: MapViewState) => {
+  const animateViewState = useCallback((targetViewState: MapViewState) => {
     cancelFocusAnimation();
 
     const startedAt = Date.now();
@@ -263,9 +286,9 @@ export function IndoorMapPlaceholder({
     };
 
     focusAnimationRef.current = requestAnimationFrame(step);
-  };
+  }, [cancelFocusAnimation, updateViewState]);
 
-  const getFocusedViewState = (mapPoint: MapPoint): MapViewState => {
+  const getFocusedViewState = useCallback((mapPoint: MapPoint): MapViewState => {
     const nextZoom = clamp(focusZoom, MIN_ZOOM, MAX_ZOOM);
     const pointOffsetX = (mapPoint.x / 100 - 0.5) * mapWidth * nextZoom;
     const pointOffsetY = (mapPoint.y / 100 - 0.5) * mapHeight * nextZoom;
@@ -276,7 +299,7 @@ export function IndoorMapPlaceholder({
       zoom: nextZoom,
       rotation: 0,
     };
-  };
+  }, [focusZoom, mapHeight, mapWidth]);
 
   const handleFrameLayout = (event: LayoutChangeEvent) => {
     const { width, height } = event.nativeEvent.layout;
@@ -396,7 +419,7 @@ export function IndoorMapPlaceholder({
   useEffect(() => {
     cancelFocusAnimation();
     updateViewState(initialViewState);
-  }, [floor, mapHeight, mapWidth]);
+  }, [cancelFocusAnimation, floor, mapHeight, mapWidth, updateViewState]);
 
   useEffect(() => {
     if (
@@ -409,9 +432,17 @@ export function IndoorMapPlaceholder({
 
     lastFocusRequestRef.current = focusRequest;
     animateViewState(getFocusedViewState(focusPoint));
-  }, [focusPoint, focusRequest, floor, mapHeight, mapWidth]);
+  }, [
+    animateViewState,
+    floor,
+    focusPoint,
+    focusRequest,
+    getFocusedViewState,
+    mapHeight,
+    mapWidth,
+  ]);
 
-  useEffect(() => cancelFocusAnimation, []);
+  useEffect(() => cancelFocusAnimation, [cancelFocusAnimation]);
 
   return (
     <View
@@ -436,6 +467,45 @@ export function IndoorMapPlaceholder({
           preserveAspectRatio="xMidYMid meet"
           width={renderedMapWidth}
         />
+        {isNavigating && routePath ? (
+          <Svg
+            height={renderedMapHeight}
+            pointerEvents="none"
+            style={styles.routeOverlay}
+            width={renderedMapWidth}
+          >
+            <Path
+              d={routePath}
+              fill="none"
+              opacity={0.28}
+              stroke="#A7D8D0"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={ROUTE_STROKE_WIDTH + 20}
+            />
+            <Path
+              d={routePath}
+              fill="none"
+              opacity={0.9}
+              stroke="#2F7E73"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={ROUTE_STROKE_WIDTH}
+            />
+            {routePointerPoint ? (
+              <G
+                transform={`translate(${routePointerPoint.x} ${routePointerPoint.y}) rotate(${routePointerRotation})`}
+              >
+                <Circle fill="#FFFFFF" r={ROUTE_ARROW_SIZE * 0.62} />
+                <Circle fill="#2F7E73" r={ROUTE_ARROW_SIZE * 0.48} />
+                <Polygon
+                  fill="#FFFFFF"
+                  points={`${ROUTE_ARROW_SIZE * 0.35},0 ${-ROUTE_ARROW_SIZE * 0.22},${-ROUTE_ARROW_SIZE * 0.24} ${-ROUTE_ARROW_SIZE * 0.08},0 ${-ROUTE_ARROW_SIZE * 0.22},${ROUTE_ARROW_SIZE * 0.24}`}
+                />
+              </G>
+            ) : null}
+          </Svg>
+        ) : null}
       </View>
     </View>
   );
@@ -453,5 +523,9 @@ const styles = StyleSheet.create({
   mapSurface: {
     alignItems: 'center',
     justifyContent: 'center',
+    position: 'relative',
+  },
+  routeOverlay: {
+    ...StyleSheet.absoluteFillObject,
   },
 });

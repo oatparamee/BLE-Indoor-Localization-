@@ -1,4 +1,4 @@
-import React, { useDeferredValue, useEffect, useMemo, useState } from 'react';
+import React, { useDeferredValue, useMemo, useState } from 'react';
 import {
   SafeAreaView,
   StatusBar,
@@ -12,6 +12,10 @@ import {
   indoorDestinations,
   prototypeMaps,
 } from '../data/mockIndoorDestinations';
+import {
+  boelterDemoRoute,
+  getRoutePositionAtProgress,
+} from '../data/mockRoutes';
 import { MapHomeScreen } from '../screens/MapHomeScreen';
 import { colors } from '../theme/tokens';
 
@@ -21,12 +25,15 @@ export function IndoorNavigatorApp() {
   const [roomSearchQuery, setRoomSearchQuery] = useState('');
   const [selectedMapId, setSelectedMapId] = useState<string | null>(defaultMap?.id ?? null);
   const [selectedSourceId, setSelectedSourceId] = useState<string | null>('boelter-5249');
-  const [selectedDestinationId, setSelectedDestinationId] = useState<string | null>(null);
+  const [selectedDestinationId, setSelectedDestinationId] = useState<string | null>(
+    'engineering-library'
+  );
   const [selectedFloor, setSelectedFloor] = useState<FloorCode>(
     defaultMap?.defaultFloor ?? '5F'
   );
   const [isNavigating, setIsNavigating] = useState(false);
   const [activeStepIndex, setActiveStepIndex] = useState(0);
+  const [routeProgress, setRouteProgress] = useState(0);
   const [mapFocusRequest, setMapFocusRequest] = useState(0);
   const deferredMapSearchQuery = useDeferredValue(mapSearchQuery);
   const deferredRoomSearchQuery = useDeferredValue(roomSearchQuery);
@@ -108,13 +115,10 @@ export function IndoorNavigatorApp() {
     selectedDestination && selectedDestination.mapId === selectedMapId
       ? selectedDestination
       : null;
-
-  const routeProgress =
-    isNavigating && visibleDestination
-      ? Math.round(
-          ((activeStepIndex + 1) / Math.max(visibleDestination.routeSteps.length, 1)) * 100
-        )
-      : 0;
+  const routePosition = useMemo(
+    () => getRoutePositionAtProgress(boelterDemoRoute, routeProgress),
+    [routeProgress]
+  );
 
   const handleSelectMap = (mapId: string) => {
     const nextMap = mapById.get(mapId);
@@ -130,6 +134,7 @@ export function IndoorNavigatorApp() {
     setRoomSearchQuery('');
     setIsNavigating(false);
     setActiveStepIndex(0);
+    setRouteProgress(0);
   };
 
   const handleClearMapSelection = () => {
@@ -141,6 +146,7 @@ export function IndoorNavigatorApp() {
     setRoomSearchQuery('');
     setIsNavigating(false);
     setActiveStepIndex(0);
+    setRouteProgress(0);
   };
 
   const handleSelectDestination = (destinationId: string) => {
@@ -154,6 +160,7 @@ export function IndoorNavigatorApp() {
     setRoomSearchQuery('');
     setIsNavigating(false);
     setActiveStepIndex(0);
+    setRouteProgress(0);
   };
 
   const handleSelectSource = (destinationId: string) => {
@@ -167,34 +174,20 @@ export function IndoorNavigatorApp() {
     setRoomSearchQuery('');
     setIsNavigating(false);
     setActiveStepIndex(0);
+    setRouteProgress(0);
   };
-
-  useEffect(() => {
-    if (!isNavigating || !visibleDestination) {
-      return;
-    }
-
-    if (activeStepIndex >= visibleDestination.routeSteps.length - 1) {
-      return;
-    }
-
-    const timer = setTimeout(() => {
-      setActiveStepIndex((currentStep) =>
-        Math.min(currentStep + 1, visibleDestination.routeSteps.length - 1)
-      );
-    }, 2800);
-
-    return () => clearTimeout(timer);
-  }, [activeStepIndex, isNavigating, visibleDestination]);
 
   const handleStartNavigation = () => {
     if (!visibleSource || !visibleDestination) {
       return;
     }
 
-    setSelectedFloor(visibleSource.floor);
+    const startPosition = getRoutePositionAtProgress(boelterDemoRoute, 0);
+
+    setSelectedFloor(startPosition.floor);
     setIsNavigating(true);
     setActiveStepIndex(0);
+    setRouteProgress(0);
     setRoomSearchQuery('');
     setMapFocusRequest((request) => request + 1);
   };
@@ -202,15 +195,40 @@ export function IndoorNavigatorApp() {
   const handleStopNavigation = () => {
     setIsNavigating(false);
     setActiveStepIndex(0);
+    setRouteProgress(0);
   };
 
   const handleRefocusNavigation = () => {
-    if (!visibleSource) {
+    if (!visibleSource && !isNavigating) {
       return;
     }
 
-    setSelectedFloor(visibleSource.floor);
+    setSelectedFloor(isNavigating ? routePosition.floor : visibleSource!.floor);
     setMapFocusRequest((request) => request + 1);
+  };
+
+  const handleChangeRouteProgress = (progress: number) => {
+    const nextProgress = Math.min(100, Math.max(0, progress));
+    const nextPosition = getRoutePositionAtProgress(
+      boelterDemoRoute,
+      nextProgress
+    );
+
+    setRouteProgress(nextProgress);
+    setSelectedFloor(nextPosition.floor);
+  };
+
+  const handleStepRouteProgress = (delta: number) => {
+    setRouteProgress((currentProgress) => {
+      const nextProgress = Math.min(100, Math.max(0, currentProgress + delta));
+      const nextPosition = getRoutePositionAtProgress(
+        boelterDemoRoute,
+        nextProgress
+      );
+
+      setSelectedFloor(nextPosition.floor);
+      return nextProgress;
+    });
   };
 
   return (
@@ -237,6 +255,8 @@ export function IndoorNavigatorApp() {
           isNavigating={isNavigating}
           activeStepIndex={activeStepIndex}
           routeProgress={routeProgress}
+          navigationRoute={isNavigating ? boelterDemoRoute : null}
+          routePosition={isNavigating ? routePosition : null}
           onSelectMap={handleSelectMap}
           onClearMapSelection={handleClearMapSelection}
           onSelectSource={handleSelectSource}
@@ -244,6 +264,8 @@ export function IndoorNavigatorApp() {
           onStartNavigation={handleStartNavigation}
           onStopNavigation={handleStopNavigation}
           onRefocusNavigation={handleRefocusNavigation}
+          onChangeRouteProgress={handleChangeRouteProgress}
+          onStepRouteProgress={handleStepRouteProgress}
           mapFocusRequest={mapFocusRequest}
         />
       </View>
