@@ -18,6 +18,7 @@ interface BeaconProfile {
   mean: number;
   stdDev: number;
   variance: number;
+  suggestedQ: number;
 }
 
 const BEACON_COLORS = [
@@ -36,12 +37,23 @@ const NUM_BINS = (HIST_MAX - HIST_MIN) / BIN_WIDTH; // 14
 
 function computeStats(readings: number[]) {
   if (readings.length === 0) {
-    return {mean: 0, stdDev: 0, variance: 0};
+    return {mean: 0, stdDev: 0, variance: 0, suggestedQ: 0};
   }
   const mean = readings.reduce((a, b) => a + b, 0) / readings.length;
   const variance =
     readings.reduce((a, b) => a + (b - mean) ** 2, 0) / readings.length;
-  return {mean, stdDev: Math.sqrt(variance), variance};
+  // Q = variance of consecutive differences / 2.
+  // For static data this ≈ R; the /2 removes the double-counting of measurement
+  // noise so Q ends up slightly below R — a reasonable 1D RSSI filter starting point.
+  let suggestedQ = variance * 0.1;
+  if (readings.length >= 2) {
+    const diffs = readings.slice(1).map((v, i) => v - readings[i]);
+    const meanD = diffs.reduce((a, b) => a + b, 0) / diffs.length;
+    const varDiffs =
+      diffs.reduce((a, b) => a + (b - meanD) ** 2, 0) / diffs.length;
+    suggestedQ = Math.max(variance * 0.001, varDiffs / 2);
+  }
+  return {mean, stdDev: Math.sqrt(variance), variance, suggestedQ};
 }
 
 function computeBins(readings: number[]): number[] {
@@ -381,6 +393,7 @@ export default function RSSIProfileScreen() {
           mean: stats.mean,
           stdDev: stats.stdDev,
           variance: stats.variance,
+          suggestedQ: stats.suggestedQ,
         };
 
         setProfiles(prev => {
@@ -548,41 +561,111 @@ export default function RSSIProfileScreen() {
             collecting={collecting}
           />
           {currentStats && (
-            <View style={styles.statsRow}>
-              <View style={styles.statBox}>
-                <Text style={styles.statLabel}>Mean</Text>
-                <Text style={styles.statValue}>
-                  {currentStats.mean.toFixed(1)} dBm
-                </Text>
+            <View>
+              <View style={styles.statsRow}>
+                <View style={styles.statBox}>
+                  <Text style={styles.statLabel}>Mean</Text>
+                  <Text style={styles.statValue}>
+                    {currentStats.mean.toFixed(1)} dBm
+                  </Text>
+                </View>
+                <View style={styles.statBox}>
+                  <Text style={styles.statLabel}>σ (Std Dev)</Text>
+                  <Text style={styles.statValue}>
+                    {currentStats.stdDev.toFixed(2)}
+                  </Text>
+                </View>
+                <View style={styles.statBox}>
+                  <Text style={styles.statLabel}>n</Text>
+                  <Text style={styles.statValue}>{currentReadings.length}</Text>
+                </View>
               </View>
-              <View style={styles.statBox}>
-                <Text style={styles.statLabel}>σ</Text>
-                <Text style={styles.statValue}>
-                  {currentStats.stdDev.toFixed(2)}
-                </Text>
-              </View>
-              <View style={styles.statBox}>
-                <Text style={styles.statLabel}>σ² (R)</Text>
-                <Text style={styles.statValue}>
-                  {currentStats.variance.toFixed(2)}
-                </Text>
-              </View>
-              <View style={styles.statBox}>
-                <Text style={styles.statLabel}>n</Text>
-                <Text style={styles.statValue}>{currentReadings.length}</Text>
+              <View style={styles.statsRow}>
+                <View style={[styles.statBox, styles.kalmanBox]}>
+                  <Text style={styles.statLabel}>R = σ²</Text>
+                  <Text style={[styles.statValue, styles.kalmanR]}>
+                    {currentStats.variance.toFixed(4)}
+                  </Text>
+                </View>
+                <View style={[styles.statBox, styles.kalmanBox]}>
+                  <Text style={styles.statLabel}>Q (suggested)</Text>
+                  <Text style={[styles.statValue, styles.kalmanQ]}>
+                    {currentStats.suggestedQ.toFixed(4)}
+                  </Text>
+                </View>
+                <View style={[styles.statBox, styles.kalmanBox]}>
+                  <Text style={styles.statLabel}>Q/R</Text>
+                  <Text style={[styles.statValue, styles.kalmanQR]}>
+                    {currentStats.variance > 0
+                      ? (currentStats.suggestedQ / currentStats.variance).toFixed(3)
+                      : '—'}
+                  </Text>
+                </View>
               </View>
             </View>
           )}
         </View>
       )}
 
-      {/* Beacon profiles */}
+      {/* Averaged Q / R summary — feed these into the 1D KF stage */}
       {profiles.length > 0 && (
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Beacon Profiles</Text>
+          <Text style={styles.sectionTitle}>1D KF Parameters</Text>
           <Text style={styles.hint}>
-            Use σ² (variance) as the RSSI measurement noise R in
-            your Kalman filter
+            Average Q and R across all beacons — use these as the single
+            Q_avg / R_avg for the 1D Kalman filter applied to every beacon's
+            raw RSSI before trilateration.
+          </Text>
+          <View style={styles.avgBox}>
+            <View style={styles.statsRow}>
+              <View style={[styles.statBox, styles.kalmanBox, {flex: 2}]}>
+                <Text style={styles.statLabel}>R_avg = mean(σ²)</Text>
+                <Text style={[styles.statValue, styles.kalmanR, {fontSize: 18}]}>
+                  {(
+                    profiles.reduce((s, p) => s + p.variance, 0) /
+                    profiles.length
+                  ).toFixed(4)}
+                </Text>
+              </View>
+              <View style={[styles.statBox, styles.kalmanBox, {flex: 2}]}>
+                <Text style={styles.statLabel}>Q_avg = mean(Q)</Text>
+                <Text style={[styles.statValue, styles.kalmanQ, {fontSize: 18}]}>
+                  {(
+                    profiles.reduce((s, p) => s + p.suggestedQ, 0) /
+                    profiles.length
+                  ).toFixed(4)}
+                </Text>
+              </View>
+              <View style={[styles.statBox, styles.kalmanBox, {flex: 1}]}>
+                <Text style={styles.statLabel}>Q/R</Text>
+                <Text style={[styles.statValue, styles.kalmanQR]}>
+                  {(() => {
+                    const rAvg =
+                      profiles.reduce((s, p) => s + p.variance, 0) /
+                      profiles.length;
+                    const qAvg =
+                      profiles.reduce((s, p) => s + p.suggestedQ, 0) /
+                      profiles.length;
+                    return rAvg > 0 ? (qAvg / rAvg).toFixed(3) : '—';
+                  })()}
+                </Text>
+              </View>
+            </View>
+            <Text style={styles.avgNote}>
+              {profiles.length === 1
+                ? 'Add more beacons to get a more representative average.'
+                : `Averaged over ${profiles.length} beacons.`}
+            </Text>
+          </View>
+        </View>
+      )}
+
+      {/* Per-beacon profiles */}
+      {profiles.length > 0 && (
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Per-Beacon Profiles</Text>
+          <Text style={styles.hint}>
+            Individual Q and R — compare across beacons to check consistency.
           </Text>
           {profiles.map((p, pIdx) => {
             const color = BEACON_COLORS[pIdx % BEACON_COLORS.length];
@@ -609,15 +692,31 @@ export default function RSSIProfileScreen() {
                     </Text>
                   </View>
                   <View style={styles.statBox}>
-                    <Text style={styles.statLabel}>σ</Text>
+                    <Text style={styles.statLabel}>σ (Std Dev)</Text>
                     <Text style={[styles.statValue, {color}]}>
                       {p.stdDev.toFixed(2)}
                     </Text>
                   </View>
-                  <View style={styles.statBox}>
-                    <Text style={styles.statLabel}>σ² (R)</Text>
-                    <Text style={[styles.statValue, {color}]}>
-                      {p.variance.toFixed(2)}
+                </View>
+                <View style={styles.statsRow}>
+                  <View style={[styles.statBox, styles.kalmanBox]}>
+                    <Text style={styles.statLabel}>R = σ²</Text>
+                    <Text style={[styles.statValue, styles.kalmanR]}>
+                      {p.variance.toFixed(4)}
+                    </Text>
+                  </View>
+                  <View style={[styles.statBox, styles.kalmanBox]}>
+                    <Text style={styles.statLabel}>Q (suggested)</Text>
+                    <Text style={[styles.statValue, styles.kalmanQ]}>
+                      {p.suggestedQ.toFixed(4)}
+                    </Text>
+                  </View>
+                  <View style={[styles.statBox, styles.kalmanBox]}>
+                    <Text style={styles.statLabel}>Q/R</Text>
+                    <Text style={[styles.statValue, styles.kalmanQR]}>
+                      {p.variance > 0
+                        ? (p.suggestedQ / p.variance).toFixed(3)
+                        : '—'}
                     </Text>
                   </View>
                 </View>
@@ -1010,6 +1109,35 @@ const styles = StyleSheet.create({
   axisLabel: {
     fontSize: 8,
     color: '#6e7681',
+    fontFamily: 'monospace',
+  },
+  avgBox: {
+    backgroundColor: '#0d1117',
+    borderWidth: 1,
+    borderColor: '#1f6feb',
+    borderRadius: 10,
+    padding: 12,
+  },
+  avgNote: {
+    color: '#6e7681',
+    fontSize: 11,
+    fontStyle: 'italic',
+    marginTop: 8,
+    textAlign: 'center',
+  },
+  kalmanBox: {
+    borderColor: '#21262d',
+  },
+  kalmanR: {
+    color: '#f0883e',
+    fontFamily: 'monospace',
+  },
+  kalmanQ: {
+    color: '#3fb950',
+    fontFamily: 'monospace',
+  },
+  kalmanQR: {
+    color: '#d2a8ff',
     fontFamily: 'monospace',
   },
 });
