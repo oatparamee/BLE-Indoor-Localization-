@@ -17,6 +17,10 @@ import {BleManager, ScanMode, State} from 'react-native-ble-plx';
 import {PermissionsAndroid, Platform} from 'react-native';
 import {RSSI_BUFFER_SIZE, BEACON_LOST_TIMEOUT_MS} from '../config/beacons';
 
+const RSSI_KF_Q = 4.0565;
+const RSSI_KF_R = 1.9188;
+const RSSI_KF_P0 = 1.0;
+
 // Known beacon advertising MACs → friendly name.
 // Android only: iOS gets the name from Core Bluetooth's GATT cache.
 // To identify a beacon's advertising MAC: hold the phone touching the beacon,
@@ -39,6 +43,29 @@ export interface BeaconReading {
   rssiBuffer: number[];
 }
 
+class RssiKalmanFilter {
+  private estimate = 0;
+  private estimationError = RSSI_KF_P0;
+  private initialized = false;
+
+  update(measurement: number): number {
+    if (!this.initialized) {
+      this.estimate = measurement;
+      this.initialized = true;
+      return this.estimate;
+    }
+
+    const predictedEstimate = this.estimate;
+    const predictedError = this.estimationError + RSSI_KF_Q;
+    const kalmanGain = predictedError / (predictedError + RSSI_KF_R);
+
+    this.estimate =
+      predictedEstimate + kalmanGain * (measurement - predictedEstimate);
+    this.estimationError = (1 - kalmanGain) * predictedError;
+    return this.estimate;
+  }
+}
+
 /** @deprecated Use BeaconReading directly — kept as alias for backward compat. */
 export type NearbyDevice = BeaconReading;
 
@@ -50,6 +77,7 @@ export type ScanCallback = (
 class BLEScanner {
   private manager: BleManager;
   private readings: Record<string, BeaconReading> = {};
+  private rssiFilters: Record<string, RssiKalmanFilter> = {};
   private listeners: Set<ScanCallback> = new Set();
   private scanning = false;
   private starting = false;
@@ -279,13 +307,15 @@ class BLEScanner {
     beacon.lastSeen = Date.now();
     beacon.active = true;
 
+    if (!this.rssiFilters[id]) {
+      this.rssiFilters[id] = new RssiKalmanFilter();
+    }
+    beacon.smoothedRssi = this.rssiFilters[id].update(rssi);
+
     beacon.rssiBuffer.push(rssi);
     if (beacon.rssiBuffer.length > RSSI_BUFFER_SIZE) {
       beacon.rssiBuffer.shift();
     }
-
-    const sum = beacon.rssiBuffer.reduce((a, b) => a + b, 0);
-    beacon.smoothedRssi = sum / beacon.rssiBuffer.length;
   }
 
   private _checkLostBeacons() {
@@ -303,6 +333,7 @@ class BLEScanner {
     for (const [id, r] of Object.entries(this.readings)) {
       if (r.lastSeen > 0 && r.lastSeen < cutoff) {
         delete this.readings[id];
+        delete this.rssiFilters[id];
       }
     }
   }
