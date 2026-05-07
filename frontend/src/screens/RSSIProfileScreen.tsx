@@ -8,6 +8,15 @@ import {
   StyleSheet,
   Alert,
 } from 'react-native';
+import Svg, {
+  Line as SvgLine,
+  Path,
+  Polyline,
+  Circle,
+  Rect,
+  G,
+  Text as SvgText,
+} from 'react-native-svg';
 import {bleScanner, BeaconReading} from '../services/bleScanner';
 
 interface BeaconProfile {
@@ -65,122 +74,294 @@ function computeBins(readings: number[]): number[] {
   return counts;
 }
 
-function ScatterChart({
+// ── Polynomial fit helpers ─────────────────────────────────────────
+// Solve a square linear system A·x = b using Gaussian elimination
+// with partial pivoting. Returns null if the system is singular.
+function solveLinear(A: number[][], b: number[]): number[] | null {
+  const n = A.length;
+  const M = A.map(row => row.slice());
+  const v = b.slice();
+
+  for (let i = 0; i < n; i++) {
+    let pivot = i;
+    for (let k = i + 1; k < n; k++) {
+      if (Math.abs(M[k][i]) > Math.abs(M[pivot][i])) pivot = k;
+    }
+    if (pivot !== i) {
+      [M[i], M[pivot]] = [M[pivot], M[i]];
+      [v[i], v[pivot]] = [v[pivot], v[i]];
+    }
+    if (Math.abs(M[i][i]) < 1e-12) return null;
+
+    for (let k = i + 1; k < n; k++) {
+      const factor = M[k][i] / M[i][i];
+      for (let j = i; j < n; j++) M[k][j] -= factor * M[i][j];
+      v[k] -= factor * v[i];
+    }
+  }
+
+  const out = new Array<number>(n);
+  for (let i = n - 1; i >= 0; i--) {
+    let sum = v[i];
+    for (let j = i + 1; j < n; j++) sum -= M[i][j] * out[j];
+    out[i] = sum / M[i][i];
+  }
+  return out;
+}
+
+// Least-squares polynomial fit. Returns coefficients [a0, a1, ..., aD]
+// for p(x) = a0 + a1·x + a2·x² + ... + aD·xᴰ.
+function polyFit(xs: number[], ys: number[], degree: number): number[] | null {
+  const n = xs.length;
+  if (n < degree + 1) return null;
+  const m = degree + 1;
+  const ATA: number[][] = Array.from({length: m}, () =>
+    new Array(m).fill(0),
+  );
+  const ATy: number[] = new Array(m).fill(0);
+
+  for (let i = 0; i < n; i++) {
+    const x = xs[i];
+    const y = ys[i];
+    const powers = new Array<number>(m);
+    powers[0] = 1;
+    for (let j = 1; j < m; j++) powers[j] = powers[j - 1] * x;
+    for (let r = 0; r < m; r++) {
+      ATy[r] += powers[r] * y;
+      for (let c = 0; c < m; c++) ATA[r][c] += powers[r] * powers[c];
+    }
+  }
+  return solveLinear(ATA, ATy);
+}
+
+function evalPoly(coeffs: number[], x: number): number {
+  let result = 0;
+  for (let i = coeffs.length - 1; i >= 0; i--) result = result * x + coeffs[i];
+  return result;
+}
+
+// Pick "round" tick values (1, 2, 5, 10, 20, ...) that fit ~`count` ticks
+// in the given range.
+function niceStep(range: number, count: number): number {
+  if (range <= 0) return 1;
+  const target = range / Math.max(1, count);
+  const steps = [1, 2, 5, 10, 20, 25, 50, 100];
+  return steps.find(s => s >= target) ?? Math.ceil(target);
+}
+
+function niceTicks(min: number, max: number, count: number): number[] {
+  const step = niceStep(max - min, count);
+  const start = Math.ceil(min / step) * step;
+  const ticks: number[] = [];
+  for (let v = start; v <= max + 1e-9; v += step) ticks.push(v);
+  return ticks;
+}
+
+// Auto Y range for RSSI data. Pads so the curve never touches the frame
+// and keeps a minimum span so a flat signal still looks readable.
+function autoYRange(values: number[], minSpan = 6): {min: number; max: number} {
+  if (values.length === 0) return {min: -90, max: -40};
+  const vMin = Math.min(...values);
+  const vMax = Math.max(...values);
+  let span = Math.max(minSpan, vMax - vMin);
+  const center = (vMax + vMin) / 2;
+  const min = Math.floor(center - span / 2 - 0.5);
+  const max = Math.ceil(center + span / 2 + 0.5);
+  return {min, max};
+}
+
+function RssiVariationChart({
   readings,
   mean,
-  stdDev,
-  collecting,
 }: {
   readings: number[];
   mean: number;
-  stdDev: number;
-  collecting: boolean;
 }) {
   const [chartWidth, setChartWidth] = useState(0);
-  const CHART_HEIGHT = 150;
-  const RSSI_MIN = -100;
-  const RSSI_MAX = -30;
-  const MAX_POINTS = 80;
+  const CHART_HEIGHT = 240;
+  const PAD_LEFT = 46;
+  const PAD_RIGHT = 14;
+  const PAD_TOP = 16;
+  const PAD_BOTTOM = 38;
 
-  const shown = readings.slice(-MAX_POINTS);
+  const innerW = Math.max(0, chartWidth - PAD_LEFT - PAD_RIGHT);
+  const innerH = CHART_HEIGHT - PAD_TOP - PAD_BOTTOM;
 
-  const yPx = (rssi: number): number => {
-    const frac = Math.max(
-      0,
-      Math.min(1, (rssi - RSSI_MIN) / (RSSI_MAX - RSSI_MIN)),
-    );
-    return (1 - frac) * CHART_HEIGHT;
-  };
+  const {min: yMin, max: yMax} = autoYRange(readings, 6);
+  const xN = readings.length;
+  const xMaxIndex = Math.max(1, xN - 1);
 
-  const dotColor = collecting ? '#f0883e' : '#3fb950';
+  const xToPx = (i: number): number =>
+    PAD_LEFT + (xN > 1 ? (i / xMaxIndex) * innerW : innerW / 2);
+  const yToPx = (v: number): number =>
+    PAD_TOP + (1 - (v - yMin) / (yMax - yMin)) * innerH;
+
+  // 4th-degree polynomial fit on x normalized to [0, 1] for numerical stability.
+  let polyPath: string | null = null;
+  if (readings.length >= 5) {
+    const xsNorm = readings.map((_, i) => i / xMaxIndex);
+    const coeffs = polyFit(xsNorm, readings, 4);
+    if (coeffs) {
+      const STEPS = Math.max(40, Math.min(160, xN * 4));
+      const segs: string[] = [];
+      for (let s = 0; s <= STEPS; s++) {
+        const t = s / STEPS;
+        const yFit = evalPoly(coeffs, t);
+        const xPx = PAD_LEFT + t * innerW;
+        const yPx = PAD_TOP + (1 - (yFit - yMin) / (yMax - yMin)) * innerH;
+        segs.push(`${s === 0 ? 'M' : 'L'}${xPx.toFixed(2)},${yPx.toFixed(2)}`);
+      }
+      polyPath = segs.join(' ');
+    }
+  }
+
+  const yTicks = niceTicks(yMin, yMax, 6);
+  const xTicks = niceTicks(0, xMaxIndex, 6).filter(
+    (v, idx, arr) => idx === 0 || v !== arr[idx - 1],
+  );
+
+  const rawLinePoints = readings
+    .map((v, i) => `${xToPx(i).toFixed(2)},${yToPx(v).toFixed(2)}`)
+    .join(' ');
 
   return (
     <View
       style={[sc.container, {height: CHART_HEIGHT}]}
       onLayout={e => setChartWidth(e.nativeEvent.layout.width)}>
-      {/* Grid lines */}
-      {([-90, -80, -70, -60, -50, -40] as number[]).map(v => (
-        <View
-          key={v}
-          style={{
-            position: 'absolute',
-            left: 0,
-            right: 0,
-            top: yPx(v),
-            height: 1,
-            backgroundColor: '#21262d',
-          }}
-        />
-      ))}
-      {/* ±1σ band */}
-      {readings.length > 0 && stdDev > 0 && (
-        <View
-          style={{
-            position: 'absolute',
-            left: 0,
-            right: 0,
-            top: yPx(mean + stdDev),
-            height: Math.max(
-              1,
-              yPx(mean - stdDev) - yPx(mean + stdDev),
-            ),
-            backgroundColor: '#58a6ff',
-            opacity: 0.1,
-          }}
-        />
-      )}
-      {/* Mean line */}
-      {readings.length > 0 && (
-        <View
-          style={{
-            position: 'absolute',
-            left: 0,
-            right: 0,
-            top: yPx(mean),
-            height: 1.5,
-            backgroundColor: '#58a6ff',
-            opacity: 0.9,
-          }}
-        />
-      )}
-      {/* Data dots */}
-      {chartWidth > 0 &&
-        shown.map((rssi, i) => {
-          const x =
-            shown.length > 1
-              ? (i / (shown.length - 1)) * (chartWidth - 10) + 5
-              : chartWidth / 2;
-          return (
-            <View
-              key={i}
-              style={{
-                position: 'absolute',
-                left: x - 3,
-                top: yPx(rssi) - 3,
-                width: 6,
-                height: 6,
-                borderRadius: 3,
-                backgroundColor: dotColor,
-                opacity: 0.85,
-              }}
+      {chartWidth > 0 && (
+        <Svg width={chartWidth} height={CHART_HEIGHT}>
+          <Rect
+            x={PAD_LEFT}
+            y={PAD_TOP}
+            width={innerW}
+            height={innerH}
+            fill="#0d1117"
+            stroke="#30363d"
+            strokeWidth={1}
+          />
+          {yTicks.map((t, idx) => {
+            const y = yToPx(t);
+            return (
+              <G key={`y${idx}`}>
+                <SvgLine
+                  x1={PAD_LEFT}
+                  y1={y}
+                  x2={PAD_LEFT + innerW}
+                  y2={y}
+                  stroke="#21262d"
+                  strokeWidth={1}
+                />
+                <SvgText
+                  x={PAD_LEFT - 5}
+                  y={y + 3}
+                  fontSize={9}
+                  textAnchor="end"
+                  fill="#8b949e">
+                  {t.toFixed(0)}
+                </SvgText>
+              </G>
+            );
+          })}
+          {xTicks.map((t, idx) => {
+            const x = xToPx(t);
+            return (
+              <G key={`x${idx}`}>
+                <SvgLine
+                  x1={x}
+                  y1={PAD_TOP}
+                  x2={x}
+                  y2={PAD_TOP + innerH}
+                  stroke="#21262d"
+                  strokeWidth={1}
+                />
+                <SvgText
+                  x={x}
+                  y={PAD_TOP + innerH + 14}
+                  fontSize={9}
+                  textAnchor="middle"
+                  fill="#8b949e">
+                  {t}
+                </SvgText>
+              </G>
+            );
+          })}
+          {readings.length > 0 && (
+            <SvgLine
+              x1={PAD_LEFT}
+              y1={yToPx(mean)}
+              x2={PAD_LEFT + innerW}
+              y2={yToPx(mean)}
+              stroke="#3fb950"
+              strokeWidth={1.6}
+              strokeDasharray="6 4"
             />
-          );
-        })}
-      {/* Y-axis labels */}
-      {([-40, -60, -80] as number[]).map(v => (
-        <Text
-          key={v}
-          style={{
-            position: 'absolute',
-            right: 4,
-            top: yPx(v) - 6,
-            fontSize: 9,
-            color: '#6e7681',
-            fontFamily: 'monospace',
-          }}>
-          {v}
-        </Text>
-      ))}
+          )}
+          {polyPath && (
+            <Path d={polyPath} stroke="#ff7b72" strokeWidth={2} fill="none" />
+          )}
+          {readings.length > 1 && (
+            <Polyline
+              points={rawLinePoints}
+              stroke="#58a6ff"
+              strokeWidth={1.4}
+              fill="none"
+            />
+          )}
+          {readings.map((v, i) => (
+            <Circle
+              key={`pt${i}`}
+              cx={xToPx(i)}
+              cy={yToPx(v)}
+              r={2.6}
+              fill="#58a6ff"
+              stroke="#0d1117"
+              strokeWidth={0.5}
+            />
+          ))}
+          <SvgText
+            x={14}
+            y={PAD_TOP + innerH / 2}
+            fontSize={10}
+            fill="#c9d1d9"
+            textAnchor="middle"
+            transform={`rotate(-90 14 ${PAD_TOP + innerH / 2})`}>
+            RSSI (dBm)
+          </SvgText>
+          <SvgText
+            x={PAD_LEFT + innerW / 2}
+            y={CHART_HEIGHT - 4}
+            fontSize={10}
+            fill="#c9d1d9"
+            textAnchor="middle">
+            Measurement Index
+          </SvgText>
+        </Svg>
+      )}
+      {chartWidth > 0 && (
+        <View style={chartStyles.legend}>
+          <View style={chartStyles.legendRow}>
+            <View
+              style={[chartStyles.legendLine, {backgroundColor: '#58a6ff'}]}
+            />
+            <View
+              style={[chartStyles.legendDot, {backgroundColor: '#58a6ff'}]}
+            />
+            <Text style={chartStyles.legendText}>RSSI readings</Text>
+          </View>
+          <View style={chartStyles.legendRow}>
+            <View
+              style={[chartStyles.legendLine, {backgroundColor: '#ff7b72'}]}
+            />
+            <Text style={chartStyles.legendText}>4th degree fit</Text>
+          </View>
+          <View style={chartStyles.legendRow}>
+            <View
+              style={[chartStyles.legendDash, {borderColor: '#3fb950'}]}
+            />
+            <Text style={chartStyles.legendText}>RSSI mean</Text>
+          </View>
+        </View>
+      )}
     </View>
   );
 }
@@ -546,19 +727,17 @@ export default function RSSIProfileScreen() {
         ) : null}
       </View>
 
-      {/* Live scatter chart */}
+      {/* Live RSSI variation chart */}
       {currentReadings.length > 0 && (
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Live Scatter</Text>
+          <Text style={styles.sectionTitle}>RSSI variation</Text>
           <Text style={styles.chartCaption}>
-            Dots = individual readings · Blue line = running mean · Shaded band
-            = ±1σ
+            Blue: raw RSSI samples · Red: 4th-degree polynomial fit · Green
+            dashed: RSSI mean
           </Text>
-          <ScatterChart
+          <RssiVariationChart
             readings={currentReadings}
             mean={currentStats?.mean ?? 0}
-            stdDev={currentStats?.stdDev ?? 0}
-            collecting={collecting}
           />
           {currentStats && (
             <View>
@@ -843,6 +1022,48 @@ const sc = StyleSheet.create({
     borderColor: '#30363d',
     borderRadius: 8,
     overflow: 'hidden',
+  },
+});
+
+const chartStyles = StyleSheet.create({
+  legend: {
+    position: 'absolute',
+    top: 22,
+    right: 22,
+    backgroundColor: 'rgba(13, 17, 23, 0.85)',
+    borderColor: '#30363d',
+    borderWidth: 1,
+    borderRadius: 6,
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    gap: 4,
+  },
+  legendRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  legendLine: {
+    width: 14,
+    height: 2,
+    borderRadius: 1,
+  },
+  legendDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+    marginLeft: -10,
+  },
+  legendDash: {
+    width: 14,
+    height: 0,
+    borderTopWidth: 2,
+    borderStyle: 'dashed',
+  },
+  legendText: {
+    color: '#c9d1d9',
+    fontSize: 10,
+    fontWeight: '500',
   },
 });
 
