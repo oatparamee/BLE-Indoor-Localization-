@@ -5,6 +5,7 @@ import {StatusBar, View, Text, StyleSheet, ActivityIndicator} from 'react-native
 import {loadApiUrl} from './src/config/api';
 
 import CalibrationScreen from './src/screens/CalibrationScreen';
+import RSSIProfileScreen from './src/screens/RSSIProfileScreen';
 import LiveReadingsScreen from './src/screens/LiveReadingsScreen';
 import SetupScreen from './src/screens/SetupScreen';
 import PositionScreen from './src/screens/PositionScreen';
@@ -16,6 +17,7 @@ const Tab = createBottomTabNavigator();
 function TabIcon({label, focused}: {label: string; focused: boolean}) {
   const icons: Record<string, string> = {
     Calibration: '⚙',
+    Profile: '📊',
     Readings: '📡',
     Beacons: '📌',
     Position: '📍',
@@ -80,6 +82,16 @@ export default function App() {
           options={{
             tabBarIcon: ({focused}) => (
               <TabIcon label="Calibration" focused={focused} />
+            ),
+          }}
+        />
+        <Tab.Screen
+          name="Profile"
+          component={RSSIProfileScreen}
+          options={{
+            title: 'RSSI Profile',
+            tabBarIcon: ({focused}) => (
+              <TabIcon label="Profile" focused={focused} />
             ),
           }}
         />
