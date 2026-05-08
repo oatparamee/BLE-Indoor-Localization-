@@ -48,6 +48,18 @@ export interface PositionBeaconInput {
   rssi: number;
 }
 
+export interface PipelineBeaconSetup {
+  id: string;
+  name: string;
+  x: number;
+  y: number;
+}
+
+export interface RssiEvent {
+  beacon_id: string;
+  rssi: number;
+}
+
 export const api = {
   health: () => get('/health'),
 
@@ -85,4 +97,33 @@ export const api = {
    */
   positionWithBeacons: (beacons: PositionBeaconInput[]) =>
     post('/position', {beacons}),
+
+  // ── Two-stage pipeline (per-beacon RSSI KF + position KF) ────────
+
+  /** Register beacons for a tracking session. Replaces any prior setup. */
+  pipelineSetup: (
+    beacons: PipelineBeaconSetup[],
+    options?: {resetPositionFilter?: boolean},
+  ) =>
+    post('/pipeline/setup', {
+      beacons,
+      reset_position_filter: options?.resetPositionFilter ?? true,
+    }),
+
+  /** Stream a batch of raw RSSI events into the per-beacon KFs. */
+  pipelineRssiEvents: (events: RssiEvent[]) =>
+    post('/rssi/events', {events}),
+
+  /** Compute and return the current smoothed position. */
+  pipelineLatestPosition: () => get('/position/latest'),
+
+  /** Reset all per-beacon filters and the position Kalman filter. */
+  pipelineReset: () => post('/pipeline/reset', {}),
+
+  /** Diagnostic snapshot of the pipeline state. */
+  pipelineStatus: () => get('/pipeline/status'),
+
+  /** Live-tune Q and/or R on the pipeline's position Kalman filter. */
+  pipelineKalmanUpdate: (params: {Q?: number; R?: number}) =>
+    post('/pipeline/kalman/update', params),
 };

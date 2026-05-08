@@ -7,8 +7,8 @@ import {
   StyleSheet,
   TextInput,
 } from 'react-native';
-import {bleScanner, BeaconReading} from '../services/bleScanner';
-import {api, PositionBeaconInput} from '../services/api';
+import {bleScanner} from '../services/bleScanner';
+import {api, PipelineBeaconSetup} from '../services/api';
 import {loadBeaconConfig, getBeaconConfig} from '../config/beaconConfig';
 
 interface PositionData {
@@ -16,7 +16,11 @@ interface PositionData {
   raw_position: {x: number; y: number};
   smooth_position: {x: number; y: number};
   converged: boolean;
+  active_beacons?: string[];
 }
+
+const RSSI_FLUSH_INTERVAL_MS = 250;
+const POSITION_POLL_INTERVAL_MS = 500;
 
 export default function PositionScreen() {
   const [tracking, setTracking] = useState(false);
@@ -28,110 +32,144 @@ export default function PositionScreen() {
   const [converged, setConverged] = useState(false);
   const [error, setError] = useState('');
   const [statusMsg, setStatusMsg] = useState('');
+  const [activeBeacons, setActiveBeacons] = useState<string[]>([]);
 
-  const readingsRef = useRef<Record<string, BeaconReading>>({});
-  const positionIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const rssiFlushIntervalRef = useRef<ReturnType<typeof setInterval> | null>(
+    null,
+  );
+  const positionPollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(
+    null,
+  );
+
+  const stopAllIntervals = useCallback(() => {
+    if (rssiFlushIntervalRef.current) {
+      clearInterval(rssiFlushIntervalRef.current);
+      rssiFlushIntervalRef.current = null;
+    }
+    if (positionPollIntervalRef.current) {
+      clearInterval(positionPollIntervalRef.current);
+      positionPollIntervalRef.current = null;
+    }
+  }, []);
 
   useEffect(() => {
-    loadKalmanStatus();
+    loadPipelineStatus();
     loadBeaconConfig();
 
-    const unsub = bleScanner.subscribe(newReadings => {
-      readingsRef.current = newReadings;
-    });
+    // Keep at least one subscriber alive so the underlying BLE scan
+    // doesn't shut down when other screens unmount. The callback is a
+    // no-op — raw events are pulled via bleScanner.drainRawEvents().
+    const unsub = bleScanner.subscribe(() => {});
 
     return () => {
-      if (positionIntervalRef.current) {
-        clearInterval(positionIntervalRef.current);
-        positionIntervalRef.current = null;
-      }
+      stopAllIntervals();
       unsub();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const loadKalmanStatus = async () => {
+  const loadPipelineStatus = async () => {
     try {
-      const status = await api.kalmanStatus();
-      const q = status.q_value ?? 0.01;
-      const r = status.r_current ?? 1.0;
+      const status = await api.pipelineStatus();
+      const q = status.position_q ?? 0.01;
+      const r = status.position_r_current ?? 1.0;
       setQValue(q);
       setRValue(r);
       setQInput(String(q));
       setRInput(String(r));
       setConverged(status.converged ?? false);
     } catch {
-      // Backend may not be reachable yet
+      // Backend may not be reachable yet — leave defaults in place.
     }
   };
 
   const startTracking = useCallback(async () => {
-    setTracking(true);
     setError('');
-    setStatusMsg('Tracking...');
+    setStatusMsg('Setting up pipeline...');
+    setPositionData(null);
 
-    if (positionIntervalRef.current) {
-      clearInterval(positionIntervalRef.current);
+    // 1. Read beacon coordinates from local storage (Beacons tab).
+    const config = getBeaconConfig();
+    const beacons: PipelineBeaconSetup[] = Object.values(config).map(b => ({
+      id: b.id,
+      name: b.name,
+      x: b.x,
+      y: b.y,
+    }));
+
+    if (beacons.length < 3) {
+      setError(
+        `Configure at least 3 beacons in the Beacons tab (currently ${beacons.length}).`,
+      );
+      setStatusMsg('');
+      return;
     }
 
-    positionIntervalRef.current = setInterval(async () => {
-      const readings = readingsRef.current;
-      const config = getBeaconConfig();
-      const beaconsPayload: PositionBeaconInput[] = [];
+    // 2. Register beacons with the backend pipeline. This wipes any
+    //    previously registered beacons and resets the position KF so
+    //    each tracking session starts cold.
+    try {
+      await api.pipelineSetup(beacons, {resetPositionFilter: true});
+    } catch (err: any) {
+      setError(`Pipeline setup failed: ${err.message}`);
+      setStatusMsg('');
+      return;
+    }
 
-      for (const [id, reading] of Object.entries(readings)) {
-        const cfg = config[id];
-        if (!cfg || !reading.active || reading.smoothedRssi === null) {
-          continue;
-        }
-        beaconsPayload.push({
-          id,
-          name: cfg.name,
-          x: cfg.x,
-          y: cfg.y,
-          rssi: reading.smoothedRssi,
-        });
-      }
+    // 3. Discard any raw events buffered before tracking started so
+    //    we don't replay stale RSSI from previous sessions.
+    bleScanner.drainRawEvents();
 
-      if (beaconsPayload.length < 3) {
-        setStatusMsg(
-          `Waiting for beacons — ${beaconsPayload.length}/3 active. ` +
-            'Configure beacons in the Beacons tab.',
-        );
-        return;
-      }
+    setTracking(true);
+    setStatusMsg('Tracking — streaming RSSI...');
 
+    // 4. Stream raw RSSI events at high frequency (per-beacon stage 1
+    //    Kalman filtering happens server-side inside the pipeline).
+    rssiFlushIntervalRef.current = setInterval(async () => {
+      const events = bleScanner.drainRawEvents();
+      if (events.length === 0) return;
       try {
-        const result = await api.positionWithBeacons(beaconsPayload);
-        if (result.error) {
-          setError(result.error);
-          setStatusMsg('');
+        await api.pipelineRssiEvents(
+          events.map(e => ({beacon_id: e.beacon_id, rssi: e.rssi})),
+        );
+      } catch {
+        // Network blips are common during tracking; keep trying.
+      }
+    }, RSSI_FLUSH_INTERVAL_MS);
+
+    // 5. Poll for the current smoothed position (stage 2 KF runs on
+    //    every call, on top of the latest filtered RSSI per beacon).
+    positionPollIntervalRef.current = setInterval(async () => {
+      try {
+        const result = await api.pipelineLatestPosition();
+        if (!result.ready) {
+          setStatusMsg(result.reason ?? 'Waiting for beacons...');
+          setActiveBeacons(result.active_beacons ?? []);
           return;
         }
         setPositionData(result);
         setConverged(result.converged ?? false);
-        setError('');
+        setActiveBeacons(result.active_beacons ?? []);
         setStatusMsg('');
+        setError('');
       } catch (err: any) {
         setError(err.message);
       }
-    }, 1000);
+    }, POSITION_POLL_INTERVAL_MS);
   }, []);
 
   const stopTracking = useCallback(() => {
     setTracking(false);
-    if (positionIntervalRef.current) {
-      clearInterval(positionIntervalRef.current);
-      positionIntervalRef.current = null;
-    }
+    stopAllIntervals();
+    bleScanner.drainRawEvents(); // drop unsent buffer
     setStatusMsg('Tracking stopped.');
-  }, []);
+  }, [stopAllIntervals]);
 
   const handleQChange = useCallback(async (value: number) => {
     setQValue(value);
     setQInput(String(value));
     try {
-      await api.kalmanUpdate({Q: value});
+      await api.pipelineKalmanUpdate({Q: value});
     } catch {}
   }, []);
 
@@ -139,7 +177,7 @@ export default function PositionScreen() {
     setRValue(value);
     setRInput(String(value));
     try {
-      await api.kalmanUpdate({R: value});
+      await api.pipelineKalmanUpdate({R: value});
     } catch {}
   }, []);
 
@@ -165,14 +203,11 @@ export default function PositionScreen() {
 
   const handleReset = useCallback(async () => {
     try {
-      await api.kalmanReset();
+      await api.pipelineReset();
       setPositionData(null);
       setConverged(false);
-      setQValue(0.01);
-      setRValue(1.0);
-      setQInput('0.01');
-      setRInput('1');
-      setStatusMsg('Kalman filter reset.');
+      setActiveBeacons([]);
+      setStatusMsg('Pipeline reset (per-beacon RSSI KFs + position KF).');
     } catch (err: any) {
       setError(err.message);
     }
@@ -192,7 +227,7 @@ export default function PositionScreen() {
     <ScrollView style={styles.container}>
       <Text style={styles.title}>Position</Text>
       <Text style={styles.subtitle}>
-        Trilateration + Adaptive Kalman smoothing
+        Per-beacon RSSI Kalman → trilateration → position Kalman
       </Text>
 
       <TouchableOpacity
@@ -208,6 +243,13 @@ export default function PositionScreen() {
 
       {statusMsg ? <Text style={styles.statusMsg}>{statusMsg}</Text> : null}
       {error ? <Text style={styles.errorMsg}>{error}</Text> : null}
+
+      {tracking ? (
+        <Text style={styles.statusMsg}>
+          Active beacons: {activeBeacons.length}
+          {activeBeacons.length > 0 ? ` — ${activeBeacons.join(', ')}` : ''}
+        </Text>
+      ) : null}
 
       {positionData ? (
         <>

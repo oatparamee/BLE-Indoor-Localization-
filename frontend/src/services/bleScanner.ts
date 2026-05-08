@@ -43,6 +43,17 @@ export interface BeaconReading {
   rssiBuffer: number[];
 }
 
+/**
+ * One raw RSSI advertisement, captured the instant the BLE radio fires
+ * the scan callback. The Position screen drains these into a single
+ * batch HTTP request to feed the backend pipeline's per-beacon KFs.
+ */
+export interface RawRssiEvent {
+  beacon_id: string;
+  rssi: number;
+  timestamp: number;
+}
+
 class RssiKalmanFilter {
   private estimate = 0;
   private estimationError = RSSI_KF_P0;
@@ -82,6 +93,14 @@ class BLEScanner {
   private scanning = false;
   private starting = false;
   private updateInterval: ReturnType<typeof setInterval> | null = null;
+  /**
+   * Per-advertisement raw RSSI events, captured the instant the BLE
+   * callback fires. Drained by callers (e.g. the Position screen) and
+   * forwarded to the backend pipeline. Capped to avoid unbounded growth
+   * if no consumer is reading.
+   */
+  private rawEventBuffer: RawRssiEvent[] = [];
+  private static readonly RAW_BUFFER_MAX = 2000;
 
   constructor() {
     this.manager = new BleManager();
@@ -316,6 +335,28 @@ class BLEScanner {
     if (beacon.rssiBuffer.length > RSSI_BUFFER_SIZE) {
       beacon.rssiBuffer.shift();
     }
+
+    this.rawEventBuffer.push({beacon_id: id, rssi, timestamp: Date.now()});
+    if (this.rawEventBuffer.length > BLEScanner.RAW_BUFFER_MAX) {
+      this.rawEventBuffer.splice(
+        0,
+        this.rawEventBuffer.length - BLEScanner.RAW_BUFFER_MAX,
+      );
+    }
+  }
+
+  /**
+   * Return AND clear the buffered per-advertisement RSSI events.
+   *
+   * Designed for the Position screen: drain at ~5-10 Hz and forward the
+   * batch to the backend's /rssi/events endpoint, which then feeds each
+   * event into the per-beacon RSSI Kalman filter.
+   */
+  drainRawEvents(): RawRssiEvent[] {
+    if (this.rawEventBuffer.length === 0) return [];
+    const events = this.rawEventBuffer;
+    this.rawEventBuffer = [];
+    return events;
   }
 
   private _checkLostBeacons() {

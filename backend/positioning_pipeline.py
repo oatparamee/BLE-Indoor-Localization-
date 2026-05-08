@@ -98,6 +98,30 @@ class PositioningPipeline:
             self._last_filtered.pop(beacon_id, None)
             self._last_seen.pop(beacon_id, None)
 
+    def replace_beacons(self, beacons: list) -> None:
+        """
+        Wipe the registry and replace it with a fresh set of beacons.
+        `beacons` is a list of dicts with keys: id, name, x, y.
+
+        Per-beacon RSSI filters are cleared so a new tracking session
+        starts cold. The position Kalman filter is NOT reset here —
+        call reset_position_filter() if you want that too.
+        """
+        with self._lock:
+            self._beacon_positions = {}
+            self._filters.clear()
+            self._last_filtered.clear()
+            self._last_seen.clear()
+            for b in beacons:
+                bid = str(b.get("id") or b.get("name") or "").strip()
+                if not bid:
+                    continue
+                self._beacon_positions[bid] = {
+                    "name": str(b.get("name") or bid),
+                    "x": float(b["x"]),
+                    "y": float(b["y"]),
+                }
+
     # ── Stage 1: ingest raw RSSI ────────────────────────────────────
 
     def on_rssi_received(self, beacon_id: str, rssi: float) -> Optional[float]:
@@ -108,18 +132,50 @@ class PositioningPipeline:
         Call this every time a BLE advertisement arrives — high frequency.
         """
         with self._lock:
-            if beacon_id not in self._beacon_positions:
-                return None  # unknown beacon, ignore silently
+            return self._ingest_one_locked(beacon_id, rssi)
 
-            kf = self._filters.get(beacon_id)
-            if kf is None:
-                kf = RssiKalmanFilter(q_value=self._q_rssi, r_value=self._r_rssi)
-                self._filters[beacon_id] = kf
+    def ingest_events(self, events: list) -> int:
+        """
+        Batch entry point — feed a list of {beacon_id, rssi} dicts into the
+        per-beacon filters in one lock acquisition. Returns the number of
+        events actually applied (unknown beacons are silently dropped).
+        """
+        if not events:
+            return 0
+        applied = 0
+        with self._lock:
+            for ev in events:
+                if not isinstance(ev, dict):
+                    continue
+                bid = ev.get("beacon_id") or ev.get("id")
+                if bid is None:
+                    continue
+                rssi = ev.get("rssi")
+                if rssi is None:
+                    continue
+                try:
+                    bid = str(bid)
+                    rssi_f = float(rssi)
+                except (TypeError, ValueError):
+                    continue
+                if self._ingest_one_locked(bid, rssi_f) is not None:
+                    applied += 1
+        return applied
 
-            filtered = kf.update(rssi)
-            self._last_filtered[beacon_id] = filtered
-            self._last_seen[beacon_id] = time.time()
-            return filtered
+    def _ingest_one_locked(self, beacon_id: str, rssi: float) -> Optional[float]:
+        """Caller MUST hold self._lock."""
+        if beacon_id not in self._beacon_positions:
+            return None  # unknown beacon, ignore silently
+
+        kf = self._filters.get(beacon_id)
+        if kf is None:
+            kf = RssiKalmanFilter(q_value=self._q_rssi, r_value=self._r_rssi)
+            self._filters[beacon_id] = kf
+
+        filtered = kf.update(rssi)
+        self._last_filtered[beacon_id] = filtered
+        self._last_seen[beacon_id] = time.time()
+        return filtered
 
     # ── Stage 2: compute current position ───────────────────────────
 
@@ -217,6 +273,37 @@ class PositioningPipeline:
             self._last_seen.clear()
             self._position_kf.reset()
             self._last_result = None
+
+    def set_position_kalman_params(
+        self, q: Optional[float] = None, r: Optional[float] = None
+    ) -> None:
+        """Live-tune the position Kalman filter (stage 2)."""
+        with self._lock:
+            if q is not None:
+                self._position_kf.set_q(float(q))
+            if r is not None:
+                self._position_kf.set_r(float(r))
+
+    def get_status(self) -> dict:
+        """
+        Diagnostic snapshot of the pipeline. Useful for inspecting which
+        beacons are active, what their filtered RSSI is, and whether the
+        position filter has converged.
+        """
+        with self._lock:
+            self._prune_stale_locked()
+            return {
+                "registered_beacons": list(self._beacon_positions.keys()),
+                "active_beacons": list(self._last_seen.keys()),
+                "filtered_rssi": dict(self._last_filtered),
+                "rssi_q": self._q_rssi,
+                "rssi_r": self._r_rssi,
+                "position_q": float(self._position_kf.q_base),
+                "position_r_current": float(self._position_kf.R[0, 0]),
+                "converged": bool(self._position_kf.converged),
+                "last_result": self._last_result,
+                "beacon_timeout_s": self._beacon_timeout_s,
+            }
 
     # ── Internals ───────────────────────────────────────────────────
 

@@ -2,15 +2,29 @@
 ==========================================================================
   BLE Indoor Localization — Flask Backend
 ==========================================================================
-  Endpoints:
-    POST /calibrate/sample   — submit one RSSI + known distance sample
-    GET  /calibrate/analyze   — get noise stats and suggested Q, R
-    POST /kalman/initialize   — init Kalman with Q and R from calibration
-    POST /kalman/update       — update Q and/or R in real time
-    GET  /kalman/status       — current filter state, Q, R, convergence
-    POST /kalman/reset        — reset the Kalman filter
-    POST /position            — trilaterate + Kalman smooth from RSSI dict
-    GET  /health              — simple health check
+  Calibration:
+    POST /calibrate/sample        submit one RSSI + known distance sample
+    GET  /calibrate/analyze       noise stats + suggested Q, R
+    POST /calibrate/reset         clear samples
+
+  Legacy single-shot trilateration (still supported, no per-beacon KF):
+    POST /position                trilaterate + global position KF from
+                                  one batch of {beacons:[{id,name,x,y,rssi}]}
+    POST /kalman/initialize       set Q/R on the legacy global KF
+    POST /kalman/update           live-tune Q and/or R on the legacy KF
+    GET  /kalman/status           legacy KF state
+    POST /kalman/reset            reset the legacy KF
+
+  New two-stage pipeline (per-beacon RSSI KF -> trilateration -> position KF):
+    POST /pipeline/setup          register beacon coordinates for a session
+    POST /rssi/events             ingest a batch of {beacon_id, rssi} events
+    GET  /position/latest         compute + return current smoothed position
+    POST /pipeline/reset          clear all per-beacon filters + position KF
+    GET  /pipeline/status         diagnostic snapshot
+    POST /pipeline/kalman/update  live-tune Q/R on the pipeline's position KF
+
+  Misc:
+    GET  /health                  simple health check
 ==========================================================================
 """
 
@@ -20,6 +34,7 @@ from flask_cors import CORS
 from config import BEACONS, RSSI_D0, N
 from calibration import CalibrationStore
 from kalman_filter import AdaptiveKalmanFilter
+from positioning_pipeline import PositioningPipeline
 from trilateration import trilaterate, trilaterate_with_positions
 
 # Hysteresis: only swap a beacon out of the active set if the challenger
@@ -61,7 +76,21 @@ app = Flask(__name__)
 CORS(app)
 
 calibration = CalibrationStore(max_samples=30)
+
+# Legacy single-shot KF — still wired to /position and /kalman/* endpoints.
 kalman = AdaptiveKalmanFilter(q_value=0.01, r_value=1.0)
+
+# New two-stage pipeline — owned by /pipeline/* and /rssi/events and
+# /position/latest. Beacons are registered at runtime via /pipeline/setup,
+# so we start with an empty registry.
+pipeline = PositioningPipeline(
+    beacon_positions={},
+    q_rssi=4.0565,
+    r_rssi=1.9188,
+    q_position=0.01,
+    r_position=1.0,
+    beacon_timeout_s=5.0,
+)
 
 
 # ---------- Health ----------
@@ -181,6 +210,139 @@ def position():
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 400
+
+
+# ---------- Pipeline (two-stage Kalman: per-beacon RSSI KF + position KF) ----------
+
+@app.route("/pipeline/setup", methods=["POST"])
+def pipeline_setup():
+    """
+    Register beacon coordinates for a tracking session. Body shape:
+
+        {
+            "beacons": [
+                {"id": "AA:BB:...", "name": "Beacon_A", "x": 0.0, "y": 0.0},
+                ...
+            ],
+            "reset_position_filter": true
+        }
+
+    Replaces any previously registered beacons. Per-beacon RSSI filters
+    are cleared. By default the position Kalman filter is also reset so
+    a fresh session starts cold.
+    """
+    data = request.get_json(force=True)
+    beacons = data.get("beacons", [])
+    if not isinstance(beacons, list) or len(beacons) < 1:
+        return jsonify({"error": "beacons must be a non-empty list"}), 400
+
+    try:
+        pipeline.replace_beacons(beacons)
+    except (KeyError, TypeError, ValueError) as e:
+        return jsonify({"error": f"invalid beacon entry: {e}"}), 400
+
+    if data.get("reset_position_filter", True):
+        pipeline.reset_position_filter()
+
+    status = pipeline.get_status()
+    return jsonify({
+        "status": "pipeline ready",
+        "registered_beacons": status["registered_beacons"],
+    })
+
+
+@app.route("/rssi/events", methods=["POST"])
+def rssi_events():
+    """
+    Ingest a batch of raw RSSI events into the per-beacon Kalman filters.
+    Body shape:
+
+        {
+            "events": [
+                {"beacon_id": "AA:BB:...", "rssi": -67},
+                {"beacon_id": "CC:DD:...", "rssi": -71},
+                ...
+            ]
+        }
+
+    Unknown beacons (not registered via /pipeline/setup) are silently
+    dropped. Returns the number of events that were applied.
+    """
+    data = request.get_json(force=True)
+    events = data.get("events")
+    if events is None:
+        # Allow a single event for convenience.
+        if "beacon_id" in data and "rssi" in data:
+            events = [{"beacon_id": data["beacon_id"], "rssi": data["rssi"]}]
+        else:
+            return jsonify({"error": "events list (or beacon_id+rssi) required"}), 400
+
+    if not isinstance(events, list):
+        return jsonify({"error": "events must be a list"}), 400
+
+    applied = pipeline.ingest_events(events)
+    return jsonify({"applied": applied, "received": len(events)})
+
+
+@app.route("/position/latest", methods=["GET"])
+def position_latest():
+    """
+    Run the periodic stage of the pipeline: trilaterate from the latest
+    filtered RSSI per beacon and smooth the result through the position
+    Kalman filter.
+
+    Returns 200 in BOTH cases:
+      - ready=true with raw_position, smooth_position, distances, etc.
+      - ready=false when fewer than 3 active beacons or trilateration
+        failed (with a `reason` field).
+    """
+    result = pipeline.update_position()
+    if result is None:
+        active = pipeline.get_active_beacons()
+        return jsonify({
+            "ready": False,
+            "reason": (
+                f"need >= 3 active beacons, have {len(active)}"
+                if len(active) < 3
+                else "trilateration failed (geometry / collinearity)"
+            ),
+            "active_beacons": active,
+        })
+
+    return jsonify({"ready": True, **result})
+
+
+@app.route("/pipeline/reset", methods=["POST"])
+def pipeline_reset():
+    """Clear per-beacon filters and reset the position Kalman filter."""
+    pipeline.reset_all()
+    return jsonify({"status": "pipeline reset"})
+
+
+@app.route("/pipeline/status", methods=["GET"])
+def pipeline_status():
+    """Diagnostic snapshot of the pipeline."""
+    return jsonify(pipeline.get_status())
+
+
+@app.route("/pipeline/kalman/update", methods=["POST"])
+def pipeline_kalman_update():
+    """Live-tune Q and/or R on the pipeline's position Kalman filter."""
+    data = request.get_json(force=True)
+    q = data.get("Q")
+    r = data.get("R")
+    if q is None and r is None:
+        return jsonify({"error": "Q and/or R required"}), 400
+    pipeline.set_position_kalman_params(
+        q=float(q) if q is not None else None,
+        r=float(r) if r is not None else None,
+    )
+    status = pipeline.get_status()
+    return jsonify({
+        "status": "updated",
+        "Q": status["position_q"],
+        "R": status["position_r_current"],
+    })
 
 
 # ---------- Run ----------
