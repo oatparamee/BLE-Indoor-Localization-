@@ -355,11 +355,6 @@ function RssiVariationChart({
             <Text style={chartStyles.legendText}>4th degree fit</Text>
           </View>
           <View style={chartStyles.legendRow}>
-<<<<<<< HEAD
-            <View
-              style={[chartStyles.legendDash, {borderColor: '#3fb950'}]}
-            />
-=======
             <View style={chartStyles.legendDashRow}>
               <View
                 style={[
@@ -374,7 +369,6 @@ function RssiVariationChart({
                 ]}
               />
             </View>
->>>>>>> 441b3b8cea93047ce74fe240436dbebaf6b2bb4c
             <Text style={chartStyles.legendText}>RSSI mean</Text>
           </View>
         </View>
@@ -1071,13 +1065,6 @@ const chartStyles = StyleSheet.create({
     borderRadius: 2.5,
     marginLeft: -10,
   },
-<<<<<<< HEAD
-  legendDash: {
-    width: 14,
-    height: 0,
-    borderTopWidth: 2,
-    borderStyle: 'dashed',
-=======
   legendDashRow: {
     width: 14,
     flexDirection: 'row',
@@ -1088,7 +1075,6 @@ const chartStyles = StyleSheet.create({
     width: 5,
     height: 2,
     borderRadius: 1,
->>>>>>> 441b3b8cea93047ce74fe240436dbebaf6b2bb4c
   },
   legendText: {
     color: '#c9d1d9',
