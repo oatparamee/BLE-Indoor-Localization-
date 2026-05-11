@@ -18,6 +18,8 @@ import Svg, {
   Text as SvgText,
 } from 'react-native-svg';
 import {bleScanner, BeaconReading} from '../services/bleScanner';
+import {api, PipelineBeaconSetup} from '../services/api';
+import {getBeaconConfig, loadBeaconConfig} from '../config/beaconConfig';
 
 interface BeaconProfile {
   id: string;
@@ -488,9 +490,15 @@ export default function RSSIProfileScreen() {
   const [sampleCountInput, setSampleCountInput] = useState('50');
   const [collecting, setCollecting] = useState(false);
   const [currentReadings, setCurrentReadings] = useState<number[]>([]);
+  const [currentFilteredReadings, setCurrentFilteredReadings] = useState<
+    number[]
+  >([]);
   const [samplesCollected, setSamplesCollected] = useState(0);
   const [maxSamples, setMaxSamples] = useState(50);
   const [statusMessage, setStatusMessage] = useState('');
+  const [latestFilteredRssi, setLatestFilteredRssi] = useState<number | null>(
+    null,
+  );
   const [selectedBeaconId, setSelectedBeaconId] = useState('');
   const [detectedBeacons, setDetectedBeacons] = useState<BeaconReading[]>([]);
   const [profiles, setProfiles] = useState<BeaconProfile[]>([]);
@@ -503,12 +511,15 @@ export default function RSSIProfileScreen() {
   const beaconReadingsRef = useRef<Record<string, BeaconReading>>({});
   const selectedIdRef = useRef('');
   const readingsAccRef = useRef<number[]>([]);
+  const filteredReadingsAccRef = useRef<number[]>([]);
+  const collectTickBusyRef = useRef(false);
 
   useEffect(() => {
     selectedIdRef.current = selectedBeaconId;
   }, [selectedBeaconId]);
 
   useEffect(() => {
+    loadBeaconConfig().catch(() => {});
     const unsub = bleScanner.subscribe((readings, nearby) => {
       beaconReadingsRef.current = readings;
       setDetectedBeacons(nearby);
@@ -527,7 +538,7 @@ export default function RSSIProfileScreen() {
     };
   }, []);
 
-  const startCollecting = useCallback(() => {
+  const startCollecting = useCallback(async () => {
     const dist = parseFloat(distance);
     if (isNaN(dist) || dist <= 0) {
       Alert.alert('Invalid Distance', 'Enter a positive distance in meters.');
@@ -543,63 +554,143 @@ export default function RSSIProfileScreen() {
       return;
     }
 
+    await loadBeaconConfig();
+    const saved = getBeaconConfig()[selectedIdRef.current];
+    if (!saved) {
+      Alert.alert(
+        'Beacon Not Configured',
+        'Save this beacon in the Beacons tab first so the backend Kalman filter can register it and return filtered RSSI.',
+      );
+      return;
+    }
+
+    const pipelineBeacon: PipelineBeaconSetup = {
+      id: saved.id,
+      name: saved.name,
+      x: saved.x,
+      y: saved.y,
+    };
+
+    try {
+      await api.pipelineSetup([pipelineBeacon], {resetPositionFilter: false});
+    } catch (err: any) {
+      Alert.alert(
+        'Pipeline Setup Failed',
+        err?.message || 'Unable to prepare backend RSSI filtering.',
+      );
+      return;
+    }
+
     setMaxSamples(count);
     setCollecting(true);
     setCurrentReadings([]);
+    setCurrentFilteredReadings([]);
     setSamplesCollected(0);
     readingsAccRef.current = [];
+    filteredReadingsAccRef.current = [];
+    setLatestFilteredRssi(null);
+    collectTickBusyRef.current = false;
+    bleScanner.drainRawEvents();
     setStatusMessage('Starting collection...');
 
-    const tick = () => {
+    const tick = async () => {
+      if (collectTickBusyRef.current) {
+        return;
+      }
+      collectTickBusyRef.current = true;
+
       const live = bleScanner.getReadings();
       const id = selectedIdRef.current;
       const beacon = live[id] ?? beaconReadingsRef.current[id];
 
       if (!beacon || beacon.rawRssi === null || !beacon.active) {
         setStatusMessage(`Waiting for ${beacon?.name ?? id}...`);
+        collectTickBusyRef.current = false;
         return;
       }
 
-      readingsAccRef.current = [...readingsAccRef.current, beacon.rawRssi];
-      const n = readingsAccRef.current.length;
-      setCurrentReadings([...readingsAccRef.current]);
-      setSamplesCollected(n);
-      setStatusMessage(
-        `Sample ${n}/${count} — RSSI: ${beacon.rawRssi} dBm (${beacon.name})`,
-      );
+      try {
+        const events = bleScanner.drainRawEvents().map(e => ({
+          beacon_id: e.beacon_id,
+          rssi: e.rssi,
+        }));
 
-      if (n >= count) {
-        if (collectIntervalRef.current) {
-          clearInterval(collectIntervalRef.current);
-          collectIntervalRef.current = null;
+        if (events.length === 0) {
+          setStatusMessage(`Waiting for a fresh RSSI packet from ${beacon.name}...`);
+          return;
         }
-        setCollecting(false);
 
-        const allReadings = readingsAccRef.current;
-        const stats = computeStats(allReadings);
-        const profile: BeaconProfile = {
-          id,
-          name: beacon.name,
-          distance: dist,
-          readings: allReadings,
-          mean: stats.mean,
-          stdDev: stats.stdDev,
-          variance: stats.variance,
-          suggestedQ: stats.suggestedQ,
-        };
+        await api.pipelineRssiEvents(events);
+        const pipelineStatus = await api.pipelineStatus();
+        const filteredMap =
+          pipelineStatus?.filtered_rssi as Record<string, number> | undefined;
+        const filteredRssi =
+          filteredMap && typeof filteredMap[id] === 'number'
+            ? filteredMap[id]
+            : null;
 
-        setProfiles(prev => {
-          const without = prev.filter(p => p.id !== id);
-          return [...without, profile];
-        });
-        setSelectedHistoId(id);
+        if (filteredRssi === null) {
+          setStatusMessage(`Waiting for backend filtered RSSI for ${beacon.name}...`);
+          return;
+        }
+
+        readingsAccRef.current = [...readingsAccRef.current, beacon.rawRssi];
+        filteredReadingsAccRef.current = [
+          ...filteredReadingsAccRef.current,
+          filteredRssi,
+        ];
+
+        const n = readingsAccRef.current.length;
+        setCurrentReadings([...readingsAccRef.current]);
+        setCurrentFilteredReadings([...filteredReadingsAccRef.current]);
+        setLatestFilteredRssi(filteredRssi);
+        setSamplesCollected(n);
         setStatusMessage(
-          `Done! Mean: ${stats.mean.toFixed(1)} dBm  |  σ: ${stats.stdDev.toFixed(2)}  |  σ²: ${stats.variance.toFixed(2)}`,
+          `Sample ${n}/${count} — raw: ${beacon.rawRssi} dBm · filtered: ${filteredRssi.toFixed(2)} dBm (${beacon.name})`,
         );
+
+        if (n >= count) {
+          if (collectIntervalRef.current) {
+            clearInterval(collectIntervalRef.current);
+            collectIntervalRef.current = null;
+          }
+          setCollecting(false);
+
+          const allReadings = readingsAccRef.current;
+          const stats = computeStats(allReadings);
+          const profile: BeaconProfile = {
+            id,
+            name: beacon.name,
+            distance: dist,
+            readings: allReadings,
+            mean: stats.mean,
+            stdDev: stats.stdDev,
+            variance: stats.variance,
+            suggestedQ: stats.suggestedQ,
+          };
+
+          setProfiles(prev => {
+            const without = prev.filter(p => p.id !== id);
+            return [...without, profile];
+          });
+          setSelectedHistoId(id);
+          const filteredStats = computeStats(filteredReadingsAccRef.current);
+          setStatusMessage(
+            `Done! Raw mean: ${stats.mean.toFixed(1)} dBm  |  filtered mean: ${filteredStats.mean.toFixed(1)} dBm`,
+          );
+        }
+      } catch (err: any) {
+        setStatusMessage(
+          err?.message
+            ? `Backend filter error: ${err.message}`
+            : 'Backend filter error while collecting.',
+        );
+      } finally {
+        collectTickBusyRef.current = false;
       }
     };
 
-    tick();
+    await tick();
     collectIntervalRef.current = setInterval(tick, 500);
   }, [distance, sampleCountInput]);
 
@@ -609,6 +700,7 @@ export default function RSSIProfileScreen() {
       collectIntervalRef.current = null;
     }
     setCollecting(false);
+    collectTickBusyRef.current = false;
     setStatusMessage('Collection stopped.');
   }, []);
 
@@ -626,13 +718,18 @@ export default function RSSIProfileScreen() {
     maxSamples > 0 ? (samplesCollected / maxSamples) * 100 : 0;
   const currentStats =
     currentReadings.length > 0 ? computeStats(currentReadings) : null;
+  const currentFilteredStats =
+    currentFilteredReadings.length > 0
+      ? computeStats(currentFilteredReadings)
+      : null;
 
   return (
     <ScrollView style={styles.container}>
       <Text style={styles.title}>RSSI Profile</Text>
       <Text style={styles.subtitle}>
         Collect readings at a fixed distance per beacon to get mean + σ for
-        Kalman noise parameters
+        Kalman noise parameters. Each run also samples the backend 1D Kalman
+        filter so you can plot filtered RSSI directly.
       </Text>
 
       {/* Beacon selector */}
@@ -653,7 +750,12 @@ export default function RSSIProfileScreen() {
               return (
                 <TouchableOpacity
                   key={dev.id}
-                  style={[styles.beaconBtn, isSel && styles.beaconBtnActive]}
+                  style={[
+                    styles.beaconBtn,
+                    isSel && styles.beaconBtnActive,
+                    collecting && styles.beaconBtnDisabled,
+                  ]}
+                  disabled={collecting}
                   onPress={() => {
                     setSelectedBeaconId(dev.id);
                     selectedIdRef.current = dev.id;
@@ -671,7 +773,13 @@ export default function RSSIProfileScreen() {
                       styles.beaconBtnSub,
                       isSel && styles.beaconBtnSubActive,
                     ]}>
-                    {dev.rawRssi !== null ? `${dev.rawRssi} dBm` : '—'}
+                    {dev.rawRssi !== null
+                      ? `${dev.rawRssi} dBm${
+                          isSel && latestFilteredRssi !== null
+                            ? ` -> ${latestFilteredRssi.toFixed(1)}`
+                            : ''
+                        }`
+                      : '—'}
                   </Text>
                 </TouchableOpacity>
               );
@@ -736,6 +844,11 @@ export default function RSSIProfileScreen() {
         {statusMessage ? (
           <Text style={styles.statusText}>{statusMessage}</Text>
         ) : null}
+        {latestFilteredRssi !== null ? (
+          <Text style={styles.statusText}>
+            Latest backend-filtered RSSI: {latestFilteredRssi.toFixed(2)} dBm
+          </Text>
+        ) : null}
       </View>
 
       {/* Live RSSI variation chart */}
@@ -789,6 +902,45 @@ export default function RSSIProfileScreen() {
                     {currentStats.variance > 0
                       ? (currentStats.suggestedQ / currentStats.variance).toFixed(3)
                       : '—'}
+                  </Text>
+                </View>
+              </View>
+            </View>
+          )}
+        </View>
+      )}
+
+      {currentFilteredReadings.length > 0 && (
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Filtered RSSI variation</Text>
+          <Text style={styles.chartCaption}>
+            Backend 1D Kalman output sampled during the same run. Use this
+            graph to inspect the smoothed signal; keep using the raw chart above
+            for Q/R calibration.
+          </Text>
+          <RssiVariationChart
+            readings={currentFilteredReadings}
+            mean={currentFilteredStats?.mean ?? 0}
+          />
+          {currentFilteredStats && (
+            <View>
+              <View style={styles.statsRow}>
+                <View style={styles.statBox}>
+                  <Text style={styles.statLabel}>Mean</Text>
+                  <Text style={styles.statValue}>
+                    {currentFilteredStats.mean.toFixed(1)} dBm
+                  </Text>
+                </View>
+                <View style={styles.statBox}>
+                  <Text style={styles.statLabel}>σ (Std Dev)</Text>
+                  <Text style={styles.statValue}>
+                    {currentFilteredStats.stdDev.toFixed(2)}
+                  </Text>
+                </View>
+                <View style={styles.statBox}>
+                  <Text style={styles.statLabel}>n</Text>
+                  <Text style={styles.statValue}>
+                    {currentFilteredReadings.length}
                   </Text>
                 </View>
               </View>
@@ -1150,6 +1302,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#30363d',
     minWidth: 110,
+  },
+  beaconBtnDisabled: {
+    opacity: 0.55,
   },
   beaconBtnActive: {
     backgroundColor: '#1f6feb',

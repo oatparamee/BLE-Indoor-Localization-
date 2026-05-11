@@ -31,6 +31,7 @@ import time
 import threading
 from typing import Optional
 
+from debug_log import debug_log
 from kalman_filter import AdaptiveKalmanFilter
 from rssi_kalman import RssiKalmanFilter
 from trilateration import trilaterate_with_positions
@@ -144,6 +145,7 @@ class PositioningPipeline:
             return 0
         applied = 0
         with self._lock:
+            filtered_preview = []
             for ev in events:
                 if not isinstance(ev, dict):
                     continue
@@ -158,8 +160,30 @@ class PositioningPipeline:
                     rssi_f = float(rssi)
                 except (TypeError, ValueError):
                     continue
-                if self._ingest_one_locked(bid, rssi_f) is not None:
+                filtered = self._ingest_one_locked(bid, rssi_f)
+                if filtered is not None:
                     applied += 1
+                    if len(filtered_preview) < 5:
+                        filtered_preview.append(
+                            {
+                                "beacon_id": bid,
+                                "rawRssi": rssi_f,
+                                "filteredRssi": round(filtered, 4),
+                            }
+                        )
+            # region agent log
+            debug_log(
+                "backend/positioning_pipeline.py:171",
+                "pipeline filtered rssi batch",
+                {
+                    "applied": applied,
+                    "registeredBeaconCount": len(self._beacon_positions),
+                    "activeBeaconCount": len(self._last_seen),
+                    "filteredPreview": filtered_preview,
+                },
+                hypothesis_id="H2",
+            )
+            # endregion
         return applied
 
     def _ingest_one_locked(self, beacon_id: str, rssi: float) -> Optional[float]:
@@ -217,6 +241,17 @@ class PositioningPipeline:
                 )
 
             if len(beacons_list) < 3:
+                # region agent log
+                debug_log(
+                    "backend/positioning_pipeline.py:237",
+                    "update position insufficient active beacons",
+                    {
+                        "activeBeaconCount": len(beacons_list),
+                        "activeBeacons": [b["id"] for b in beacons_list],
+                    },
+                    hypothesis_id="H2",
+                )
+                # endregion
                 return None
 
             try:
@@ -224,9 +259,37 @@ class PositioningPipeline:
                     beacons_list
                 )
             except ValueError:
+                # region agent log
+                debug_log(
+                    "backend/positioning_pipeline.py:251",
+                    "update position trilateration failed",
+                    {
+                        "activeBeaconCount": len(beacons_list),
+                        "activeBeacons": [b["id"] for b in beacons_list],
+                    },
+                    hypothesis_id="H5",
+                )
+                # endregion
                 return None
 
             smooth_x, smooth_y = self._position_kf.step([raw_x, raw_y])
+            # region agent log
+            debug_log(
+                "backend/positioning_pipeline.py:265",
+                "position kalman step",
+                {
+                    "rawPosition": {"x": round(raw_x, 4), "y": round(raw_y, 4)},
+                    "smoothPosition": {
+                        "x": round(smooth_x, 4),
+                        "y": round(smooth_y, 4),
+                    },
+                    "positionQ": float(self._position_kf.q_base),
+                    "positionR": float(self._position_kf.R[0, 0]),
+                    "converged": bool(self._position_kf.converged),
+                },
+                hypothesis_id="H4",
+            )
+            # endregion
 
             result = {
                 "raw_position": {"x": round(raw_x, 4), "y": round(raw_y, 4)},

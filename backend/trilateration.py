@@ -10,10 +10,11 @@ finds the best fit.
 
 import numpy as np
 from config import BEACONS, RSSI_D0, N
+from debug_log import debug_log
 
 
 def rssi_to_distance(rssi):
-    """Convert RSSI to distance in meters.
+    """Convert RSSI to distance in meters. (Using Path Loss Formula)
     d = 10 ^ ((RSSI_D0 - RSSI) / (10 * N))
     Clamp minimum to 0.1 m.
     """
@@ -21,7 +22,7 @@ def rssi_to_distance(rssi):
     distance = 10.0 ** exponent
     return max(distance, 0.1)
 
-
+#Double check this function
 def _solve_positions(positions_list, distances_list):
     """Least-squares trilateration core. Returns (raw_x, raw_y)."""
     positions = np.array(positions_list, dtype=float)
@@ -61,7 +62,10 @@ def _solve_positions(positions_list, distances_list):
 
     return float(result[0]), float(result[1])
 
-
+#Double check this function
+#Wrong translation of raw measurement to actual distance
+#Make sure z is correct, if z is incorrect then x parameter would never be correct
+#Check the actual axis
 def trilaterate(rssi_readings: dict):
     """
     Legacy API. Looks up positions in the static BEACONS config using
@@ -121,7 +125,7 @@ def trilaterate_with_positions(beacons_list):
             bid = str(entry.get("id") or entry.get("name") or "").strip()
             x = float(entry["x"])
             y = float(entry["y"])
-            rssi = float(entry["rssi"])
+            rssi = float(entry["rssi"]) #this is reading one RSSI when do trilateration
         except (KeyError, TypeError, ValueError):
             continue
         if not bid:
@@ -143,6 +147,30 @@ def trilaterate_with_positions(beacons_list):
         positions.append([entry["x"], entry["y"]])
         distances.append(d)
         distances_dict[entry["label"]] = round(d, 4)
+
+    # region agent log
+    debug_log(
+        "backend/trilateration.py:154",
+        "trilateration inputs converted to distances",
+        {
+            "beaconCount": len(clean),
+            "rssiD0": RSSI_D0,
+            "pathLossN": N,
+            "inputs": [
+                {
+                    "id": entry["id"],
+                    "label": entry["label"],
+                    "x": entry["x"],
+                    "y": entry["y"],
+                    "rssi": round(entry["rssi"], 4),
+                    "distance": round(distances[i], 4),
+                }
+                for i, entry in enumerate(clean[:6])
+            ],
+        },
+        hypothesis_id="H3",
+    )
+    # endregion
 
     raw_x, raw_y = _solve_positions(positions, distances)
     return distances_dict, raw_x, raw_y

@@ -33,6 +33,7 @@ from flask_cors import CORS
 
 from config import BEACONS, RSSI_D0, N
 from calibration import CalibrationStore
+from debug_log import debug_log
 from kalman_filter import AdaptiveKalmanFilter
 from positioning_pipeline import PositioningPipeline
 from trilateration import trilaterate, trilaterate_with_positions
@@ -241,6 +242,26 @@ def pipeline_setup():
     except (KeyError, TypeError, ValueError) as e:
         return jsonify({"error": f"invalid beacon entry: {e}"}), 400
 
+    # region agent log
+    debug_log(
+        "backend/app.py:244",
+        "pipeline setup registered beacons",
+        {
+            "beaconCount": len(beacons),
+            "beacons": [
+                {
+                    "id": str(b.get("id") or b.get("name") or ""),
+                    "name": str(b.get("name") or b.get("id") or ""),
+                    "x": b.get("x"),
+                    "y": b.get("y"),
+                }
+                for b in beacons[:6]
+            ],
+        },
+        hypothesis_id="H1",
+    )
+    # endregion
+
     if data.get("reset_position_filter", True):
         pipeline.reset_position_filter()
 
@@ -281,6 +302,18 @@ def rssi_events():
         return jsonify({"error": "events must be a list"}), 400
 
     applied = pipeline.ingest_events(events)
+    # region agent log
+    debug_log(
+        "backend/app.py:287",
+        "rssi batch ingested",
+        {
+            "received": len(events),
+            "applied": applied,
+            "sample": events[:5],
+        },
+        hypothesis_id="H2",
+    )
+    # endregion
     return jsonify({"applied": applied, "received": len(events)})
 
 
@@ -299,6 +332,17 @@ def position_latest():
     result = pipeline.update_position()
     if result is None:
         active = pipeline.get_active_beacons()
+        # region agent log
+        debug_log(
+            "backend/app.py:307",
+            "position latest not ready",
+            {
+                "activeBeaconCount": len(active),
+                "activeBeacons": active,
+            },
+            hypothesis_id="H2",
+        )
+        # endregion
         return jsonify({
             "ready": False,
             "reason": (
@@ -309,6 +353,19 @@ def position_latest():
             "active_beacons": active,
         })
 
+    # region agent log
+    debug_log(
+        "backend/app.py:320",
+        "position latest ready",
+        {
+            "activeBeacons": result.get("active_beacons", []),
+            "rawPosition": result.get("raw_position"),
+            "smoothPosition": result.get("smooth_position"),
+            "converged": result.get("converged"),
+        },
+        hypothesis_id="H4",
+    )
+    # endregion
     return jsonify({"ready": True, **result})
 
 
