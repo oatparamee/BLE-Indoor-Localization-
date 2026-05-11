@@ -25,7 +25,7 @@ from trilateration import trilaterate, trilaterate_with_positions
 # Hysteresis: only swap a beacon out of the active set if the challenger
 # is at least this many dB stronger than the weakest currently active beacon.
 last_active_ids: list[str] = []
-HYSTERESIS_THRESHOLD = 10.0
+HYSTERESIS_THRESHOLD = 15.0
 
 
 def _select_top3_with_hysteresis(all_beacons: list, last_ids: list[str]) -> list:
