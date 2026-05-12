@@ -23,8 +23,22 @@ def rssi_to_distance(rssi):
     return max(distance, 0.1)
 
 #Double check this function
-def _solve_positions(positions_list, distances_list):
-    """Least-squares trilateration core. Returns (raw_x, raw_y)."""
+def _solve_positions(positions_list, distances_list, rssi_list=None):
+    """Least-squares trilateration core. Returns (raw_x, raw_y).
+
+    When rssi_list is provided, each beacon row contributes with a weight
+    derived from its RSSI:
+
+        weight_i = 10 ** (rssi_i / 20.0)
+
+    For each non-reference beacon i, both the row of A and the entry of
+    b are multiplied by sqrt(weight_i * weight_ref). This makes
+    np.linalg.lstsq minimize the weighted sum of squared errors, biasing
+    the solution toward the beacons with the strongest (least noisy) RSSI.
+
+    When rssi_list is None, all beacons contribute equally (legacy
+    behavior used by trilaterate()).
+    """
     positions = np.array(positions_list, dtype=float)
     distances = np.array(distances_list, dtype=float)
 
@@ -33,17 +47,31 @@ def _solve_positions(positions_list, distances_list):
     x_ref, y_ref = positions[ref]
     d_ref = distances[ref]
 
+    if rssi_list is not None:
+        rssi_arr = np.array(rssi_list, dtype=float)
+        weights = 10.0 ** (rssi_arr / 20.0)
+        w_ref = weights[ref]
+    else:
+        weights = None
+        w_ref = None
+
     A = []
     b_vec = []
     for i in range(ref):
         xi, yi = positions[i]
         di = distances[i]
-        A.append([2.0 * (x_ref - xi), 2.0 * (y_ref - yi)])
-        b_vec.append(
+        row = [2.0 * (x_ref - xi), 2.0 * (y_ref - yi)]
+        rhs = (
             di**2 - d_ref**2
             - xi**2 + x_ref**2
             - yi**2 + y_ref**2
         )
+        if weights is not None:
+            sqrt_w = float(np.sqrt(weights[i] * w_ref))
+            row = [sqrt_w * row[0], sqrt_w * row[1]]
+            rhs = sqrt_w * rhs
+        A.append(row)
+        b_vec.append(rhs)
 
     A = np.array(A)
     b_vec = np.array(b_vec)
@@ -140,12 +168,14 @@ def trilaterate_with_positions(beacons_list):
 
     positions = []
     distances = []
+    rssi_values = []
     distances_dict = {}
 
     for entry in clean:
         d = rssi_to_distance(entry["rssi"])
         positions.append([entry["x"], entry["y"]])
         distances.append(d)
+        rssi_values.append(entry["rssi"])
         distances_dict[entry["label"]] = round(d, 4)
 
     # region agent log
@@ -164,6 +194,7 @@ def trilaterate_with_positions(beacons_list):
                     "y": entry["y"],
                     "rssi": round(entry["rssi"], 4),
                     "distance": round(distances[i], 4),
+                    "weight": round(10.0 ** (entry["rssi"] / 20.0), 6),
                 }
                 for i, entry in enumerate(clean[:6])
             ],
@@ -172,5 +203,5 @@ def trilaterate_with_positions(beacons_list):
     )
     # endregion
 
-    raw_x, raw_y = _solve_positions(positions, distances)
+    raw_x, raw_y = _solve_positions(positions, distances, rssi_values)
     return distances_dict, raw_x, raw_y

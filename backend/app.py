@@ -15,13 +15,14 @@
     GET  /kalman/status           legacy KF state
     POST /kalman/reset            reset the legacy KF
 
-  New two-stage pipeline (per-beacon RSSI KF -> trilateration -> position KF):
+  New two-stage pipeline (per-beacon RSSI KF -> weighted trilateration ->
+  rolling median over (x,y)):
     POST /pipeline/setup          register beacon coordinates for a session
     POST /rssi/events             ingest a batch of {beacon_id, rssi} events
     GET  /position/latest         compute + return current smoothed position
-    POST /pipeline/reset          clear all per-beacon filters + position KF
+    POST /pipeline/reset          clear all per-beacon filters + median window
     GET  /pipeline/status         diagnostic snapshot
-    POST /pipeline/kalman/update  live-tune Q/R on the pipeline's position KF
+    POST /pipeline/kalman/update  deprecated no-op (median filter has no Q/R)
 
   Misc:
     GET  /health                  simple health check
@@ -384,21 +385,26 @@ def pipeline_status():
 
 @app.route("/pipeline/kalman/update", methods=["POST"])
 def pipeline_kalman_update():
-    """Live-tune Q and/or R on the pipeline's position Kalman filter."""
-    data = request.get_json(force=True)
+    """Deprecated.
+
+    Stage 2 of the pipeline is now a rolling median filter (see
+    POSITION_MEDIAN_WINDOW in config.py); there is no longer a Q/R to
+    tune. The endpoint is kept so older clients don't 500 — it accepts
+    the request, ignores Q/R, and returns the current median window
+    size for diagnostic purposes.
+    """
+    data = request.get_json(force=True) or {}
     q = data.get("Q")
     r = data.get("R")
-    if q is None and r is None:
-        return jsonify({"error": "Q and/or R required"}), 400
     pipeline.set_position_kalman_params(
         q=float(q) if q is not None else None,
         r=float(r) if r is not None else None,
     )
     status = pipeline.get_status()
     return jsonify({
-        "status": "updated",
-        "Q": status["position_q"],
-        "R": status["position_r_current"],
+        "status": "ignored — stage 2 is a median filter, no Q/R to tune",
+        "position_median_window": status.get("position_median_window"),
+        "position_window_fill": status.get("position_window_fill"),
     })
 
 
