@@ -29,3 +29,9 @@ RSSI_D0 = -63
 
 # Path loss exponent — replace with real measurements later
 N = 1.3
+N = 1.3
+
+# Rolling window size for the position median filter (stage 2 of the
+# pipeline). Larger = smoother but more lag; smaller = snappier but
+# more jitter. 5 ≈ 2.5 s of lag at 0.5 s update cadence.
+POSITION_MEDIAN_WINDOW = 5

@@ -1,13 +1,15 @@
 """
-Two-stage Kalman filter pipeline for BLE indoor localization.
+Two-stage pipeline for BLE indoor localization.
 
 Stage 1 — per-beacon RSSI smoothing:
     One RssiKalmanFilter per beacon_id. Absorbs the high-frequency
     noisy RSSI stream coming straight off the BLE radio.
 
 Stage 2 — position smoothing:
-    AdaptiveKalmanFilter on the trilaterated (x, y). Same instance the
-    backend has been using; R adapts from observed innovation variance.
+    Rolling median filter over the trilaterated (x, y). x and y are
+    smoothed independently so a single outlier on either axis cannot
+    drag the reported position. The window size is POSITION_MEDIAN_WINDOW
+    (see config.py).
 
 Pipeline:
 
@@ -22,17 +24,19 @@ Pipeline:
     pipeline.update_position()
         → drops beacons not seen for `beacon_timeout_s`
         → builds beacons_list from cached filtered RSSI
-        → calls trilaterate_with_positions()
-        → feeds raw (x, y) into AdaptiveKalmanFilter
+        → calls trilaterate_with_positions()  (weighted LSQ by RSSI)
+        → pushes raw (x, y) into rolling-window median filter
         → returns smoothed position (or None when < 3 active beacons)
 """
 
 import time
 import threading
+import statistics
+from collections import deque
 from typing import Optional
 
+from config import POSITION_MEDIAN_WINDOW
 from debug_log import debug_log
-from kalman_filter import AdaptiveKalmanFilter
 from rssi_kalman import RssiKalmanFilter
 from trilateration import trilaterate_with_positions
 
@@ -40,7 +44,7 @@ from trilateration import trilaterate_with_positions
 class PositioningPipeline:
     """
     End-to-end pipeline: raw RSSI → per-beacon Kalman → distance →
-    trilateration → position Kalman → smoothed (x, y).
+    weighted-LSQ trilateration → rolling-window median → smoothed (x, y).
 
     Thread-safe: a single internal lock guards all mutable state so
     on_rssi_received() can be called from a BLE callback thread while
@@ -61,10 +65,14 @@ class PositioningPipeline:
             Known anchor coordinates. Beacons not in this dict are ignored
             (call add_beacon() later if you discover them dynamically).
         q_rssi, r_rssi: noise params for per-beacon RSSI Kalman filters.
-        q_position, r_position: initial noise params for the 2D position KF.
+        q_position, r_position: accepted for backward compatibility with
+            callers that still pass position-Kalman tuning. They are NOT
+            used — stage 2 is a median filter and has no Q/R.
         beacon_timeout_s: prune a beacon (and its filter) after this many
             seconds of no readings.
         """
+        del q_position, r_position  # legacy args, intentionally ignored
+
         self._beacon_positions: dict = dict(beacon_positions or {})
         self._q_rssi = float(q_rssi)
         self._r_rssi = float(r_rssi)
@@ -74,9 +82,8 @@ class PositioningPipeline:
         self._last_filtered: dict = {}      # beacon_id → latest filtered RSSI
         self._last_seen: dict = {}          # beacon_id → time.time() of last reading
 
-        self._position_kf = AdaptiveKalmanFilter(
-            q_value=q_position, r_value=r_position
-        )
+        self._position_window_x: deque = deque(maxlen=POSITION_MEDIAN_WINDOW)
+        self._position_window_y: deque = deque(maxlen=POSITION_MEDIAN_WINDOW)
         self._last_result: Optional[dict] = None
 
         self._lock = threading.Lock()
@@ -272,20 +279,27 @@ class PositioningPipeline:
                 # endregion
                 return None
 
-            smooth_x, smooth_y = self._position_kf.step([raw_x, raw_y])
+            self._position_window_x.append(raw_x)
+            self._position_window_y.append(raw_y)
+            smooth_x = float(statistics.median(self._position_window_x))
+            smooth_y = float(statistics.median(self._position_window_y))
+            window_full = (
+                len(self._position_window_x) >= POSITION_MEDIAN_WINDOW
+            )
+
             # region agent log
             debug_log(
                 "backend/positioning_pipeline.py:265",
-                "position kalman step",
+                "position median step",
                 {
                     "rawPosition": {"x": round(raw_x, 4), "y": round(raw_y, 4)},
                     "smoothPosition": {
                         "x": round(smooth_x, 4),
                         "y": round(smooth_y, 4),
                     },
-                    "positionQ": float(self._position_kf.q_base),
-                    "positionR": float(self._position_kf.R[0, 0]),
-                    "converged": bool(self._position_kf.converged),
+                    "windowSize": POSITION_MEDIAN_WINDOW,
+                    "windowFill": len(self._position_window_x),
+                    "converged": window_full,
                 },
                 hypothesis_id="H4",
             )
@@ -299,7 +313,7 @@ class PositioningPipeline:
                 },
                 "distances": distances_dict,
                 "active_beacons": [b["id"] for b in beacons_list],
-                "converged": bool(self._position_kf.converged),
+                "converged": window_full,
                 "timestamp": time.time(),
             }
             self._last_result = result
@@ -324,8 +338,10 @@ class PositioningPipeline:
             return self._last_filtered.get(beacon_id)
 
     def reset_position_filter(self) -> None:
+        """Clear the position median window so a fresh session starts cold."""
         with self._lock:
-            self._position_kf.reset()
+            self._position_window_x.clear()
+            self._position_window_y.clear()
             self._last_result = None
 
     def reset_all(self) -> None:
@@ -334,36 +350,40 @@ class PositioningPipeline:
             self._filters.clear()
             self._last_filtered.clear()
             self._last_seen.clear()
-            self._position_kf.reset()
+            self._position_window_x.clear()
+            self._position_window_y.clear()
             self._last_result = None
 
     def set_position_kalman_params(
         self, q: Optional[float] = None, r: Optional[float] = None
     ) -> None:
-        """Live-tune the position Kalman filter (stage 2)."""
-        with self._lock:
-            if q is not None:
-                self._position_kf.set_q(float(q))
-            if r is not None:
-                self._position_kf.set_r(float(r))
+        """Deprecated no-op.
+
+        Kept so the legacy /pipeline/kalman/update endpoint does not 500.
+        Stage 2 is now a median filter with no tunable noise parameters.
+        """
+        del q, r
 
     def get_status(self) -> dict:
         """
         Diagnostic snapshot of the pipeline. Useful for inspecting which
-        beacons are active, what their filtered RSSI is, and whether the
-        position filter has converged.
+        beacons are active, what their filtered RSSI is, and how full the
+        position median window currently is.
         """
         with self._lock:
             self._prune_stale_locked()
+            window_full = (
+                len(self._position_window_x) >= POSITION_MEDIAN_WINDOW
+            )
             return {
                 "registered_beacons": list(self._beacon_positions.keys()),
                 "active_beacons": list(self._last_seen.keys()),
                 "filtered_rssi": dict(self._last_filtered),
                 "rssi_q": self._q_rssi,
                 "rssi_r": self._r_rssi,
-                "position_q": float(self._position_kf.q_base),
-                "position_r_current": float(self._position_kf.R[0, 0]),
-                "converged": bool(self._position_kf.converged),
+                "position_median_window": POSITION_MEDIAN_WINDOW,
+                "position_window_fill": len(self._position_window_x),
+                "converged": window_full,
                 "last_result": self._last_result,
                 "beacon_timeout_s": self._beacon_timeout_s,
             }
