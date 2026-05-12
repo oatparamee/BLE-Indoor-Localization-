@@ -28,6 +28,8 @@ export default function SetupScreen() {
   const [nameInput, setNameInput] = useState('');
   const [xInput, setXInput] = useState('');
   const [yInput, setYInput] = useState('');
+  const [qInput, setQInput] = useState('');
+  const [rInput, setRInput] = useState('');
   const [saveError, setSaveError] = useState('');
 
   const unsubRef = useRef<(() => void) | null>(null);
@@ -65,6 +67,12 @@ export default function SetupScreen() {
     setNameInput(existing?.name ?? advertisedName);
     setXInput(existing ? String(existing.x) : '');
     setYInput(existing ? String(existing.y) : '');
+    setQInput(
+      existing && typeof existing.q === 'number' ? String(existing.q) : '',
+    );
+    setRInput(
+      existing && typeof existing.r === 'number' ? String(existing.r) : '',
+    );
     setSaveError('');
   };
 
@@ -76,11 +84,36 @@ export default function SetupScreen() {
       setSaveError('Enter valid numbers for x and y.');
       return;
     }
+
+    // Q/R are optional. If either is provided, BOTH must be valid positives
+    // (a 1D Kalman filter with q<=0 or r<=0 is mathematically degenerate).
+    const qRaw = qInput.trim();
+    const rRaw = rInput.trim();
+    let q: number | undefined;
+    let r: number | undefined;
+    if (qRaw !== '' || rRaw !== '') {
+      const qParsed = parseFloat(qRaw);
+      const rParsed = parseFloat(rRaw);
+      if (
+        !Number.isFinite(qParsed) ||
+        !Number.isFinite(rParsed) ||
+        qParsed <= 0 ||
+        rParsed <= 0
+      ) {
+        setSaveError('Q and R must both be positive numbers (or leave both blank).');
+        return;
+      }
+      q = qParsed;
+      r = rParsed;
+    }
+
     const beacon: SavedBeacon = {
       id: editTarget.id,
       name: nameInput.trim() || editTarget.advertisedName,
       x,
       y,
+      ...(q !== undefined ? {q} : {}),
+      ...(r !== undefined ? {r} : {}),
     };
     await saveBeacon(beacon);
     setConfig({...getBeaconConfig()});
@@ -129,6 +162,15 @@ export default function SetupScreen() {
                   <Text style={styles.beaconCoords}>
                     x: {beacon.x} m  ·  y: {beacon.y} m
                   </Text>
+                  {typeof beacon.q === 'number' && typeof beacon.r === 'number' ? (
+                    <Text style={styles.beaconKalman}>
+                      Q: {beacon.q.toFixed(4)}  ·  R: {beacon.r.toFixed(4)}
+                    </Text>
+                  ) : (
+                    <Text style={styles.beaconKalmanMissing}>
+                      Q/R: using global default
+                    </Text>
+                  )}
                 </View>
                 <View style={styles.beaconCardRight}>
                   {rssi !== null && rssi !== undefined ? (
@@ -249,6 +291,36 @@ export default function SetupScreen() {
               </View>
             </View>
 
+            <Text style={styles.kalmanHint}>
+              1D Kalman noise (optional — auto-filled by RSSI Profile screen).
+              Leave both blank to use the global default.
+            </Text>
+            <View style={styles.coordsRow}>
+              <View style={{flex: 1}}>
+                <Text style={styles.fieldLabel}>Q (process noise)</Text>
+                <TextInput
+                  style={styles.fieldInput}
+                  value={qInput}
+                  onChangeText={setQInput}
+                  keyboardType="numeric"
+                  placeholder="e.g. 0.7143"
+                  placeholderTextColor="#6e7681"
+                />
+              </View>
+              <View style={{width: 12}} />
+              <View style={{flex: 1}}>
+                <Text style={styles.fieldLabel}>R (measurement noise)</Text>
+                <TextInput
+                  style={styles.fieldInput}
+                  value={rInput}
+                  onChangeText={setRInput}
+                  keyboardType="numeric"
+                  placeholder="e.g. 1.29"
+                  placeholderTextColor="#6e7681"
+                />
+              </View>
+            </View>
+
             {saveError ? (
               <Text style={styles.saveError}>{saveError}</Text>
             ) : null}
@@ -347,6 +419,25 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#8b949e',
     fontFamily: 'monospace',
+  },
+  beaconKalman: {
+    fontSize: 11,
+    color: '#3fb950',
+    fontFamily: 'monospace',
+    marginTop: 2,
+  },
+  beaconKalmanMissing: {
+    fontSize: 11,
+    color: '#d29922',
+    fontStyle: 'italic',
+    marginTop: 2,
+  },
+  kalmanHint: {
+    fontSize: 12,
+    color: '#8b949e',
+    marginTop: 4,
+    marginBottom: 8,
+    lineHeight: 16,
   },
   rssi: {
     fontSize: 13,

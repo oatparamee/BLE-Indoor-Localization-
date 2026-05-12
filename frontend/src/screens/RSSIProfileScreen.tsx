@@ -19,7 +19,11 @@ import Svg, {
 } from 'react-native-svg';
 import {bleScanner, BeaconReading} from '../services/bleScanner';
 import {api, PipelineBeaconSetup} from '../services/api';
-import {getBeaconConfig, loadBeaconConfig} from '../config/beaconConfig';
+import {
+  getBeaconConfig,
+  loadBeaconConfig,
+  saveBeaconKalman,
+} from '../config/beaconConfig';
 
 interface BeaconProfile {
   id: string;
@@ -675,8 +679,33 @@ export default function RSSIProfileScreen() {
           });
           setSelectedHistoId(id);
           const filteredStats = computeStats(filteredReadingsAccRef.current);
+
+          // Auto-save per-beacon Q/R to AsyncStorage so the Position screen
+          // can include them when calling /pipeline/setup.
+          // Q = suggested process noise; R = variance of the raw samples.
+          let kalmanSaveMsg = '';
+          if (
+            Number.isFinite(stats.suggestedQ) &&
+            Number.isFinite(stats.variance) &&
+            stats.suggestedQ > 0 &&
+            stats.variance > 0
+          ) {
+            try {
+              const persisted = await saveBeaconKalman(
+                id,
+                stats.suggestedQ,
+                stats.variance,
+              );
+              kalmanSaveMsg = persisted
+                ? `  |  saved Q=${stats.suggestedQ.toFixed(4)} R=${stats.variance.toFixed(4)} to beacon config`
+                : '  |  beacon not in Beacons tab — Q/R not saved';
+            } catch {
+              kalmanSaveMsg = '  |  failed to save Q/R';
+            }
+          }
+
           setStatusMessage(
-            `Done! Raw mean: ${stats.mean.toFixed(1)} dBm  |  filtered mean: ${filteredStats.mean.toFixed(1)} dBm`,
+            `Done! Raw mean: ${stats.mean.toFixed(1)} dBm  |  filtered mean: ${filteredStats.mean.toFixed(1)} dBm${kalmanSaveMsg}`,
           );
         }
       } catch (err: any) {

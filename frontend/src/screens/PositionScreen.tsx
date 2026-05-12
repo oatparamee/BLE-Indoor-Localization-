@@ -78,13 +78,25 @@ export default function PositionScreen() {
     setPositionData(null);
 
     // 1. Read beacon coordinates from local storage (Beacons tab).
+    //    Each beacon may carry its own 1D Kalman q/r — measured by the
+    //    RSSI Profile screen (auto-saved) or entered by hand on the
+    //    Beacons tab. Beacons without q/r fall back to the backend's
+    //    global default; we surface a warning for those.
     const config = getBeaconConfig();
-    const beacons: PipelineBeaconSetup[] = Object.values(config).map(b => ({
-      id: b.id,
-      name: b.name,
-      x: b.x,
-      y: b.y,
-    }));
+    const beacons: PipelineBeaconSetup[] = Object.values(config).map(b => {
+      const hasQR =
+        typeof b.q === 'number' &&
+        Number.isFinite(b.q) &&
+        typeof b.r === 'number' &&
+        Number.isFinite(b.r);
+      return {
+        id: b.id,
+        name: b.name,
+        x: b.x,
+        y: b.y,
+        ...(hasQR ? {q: b.q, r: b.r} : {}),
+      };
+    });
 
     if (beacons.length < 3) {
       setError(
@@ -93,6 +105,10 @@ export default function PositionScreen() {
       setStatusMsg('');
       return;
     }
+
+    const beaconsMissingKalman = beacons
+      .filter(b => b.q === undefined || b.r === undefined)
+      .map(b => b.name);
 
     // 2. Register beacons with the backend pipeline. This wipes any
     //    previously registered beacons and resets the median window so
@@ -110,7 +126,13 @@ export default function PositionScreen() {
     bleScanner.drainRawEvents();
 
     setTracking(true);
-    setStatusMsg('Tracking — streaming RSSI...');
+    if (beaconsMissingKalman.length > 0) {
+      setStatusMsg(
+        `Tracking — using global Q/R default for ${beaconsMissingKalman.length} beacon(s): ${beaconsMissingKalman.join(', ')}. Run the RSSI Profile tab on each to use per-beacon noise values.`,
+      );
+    } else {
+      setStatusMsg('Tracking — streaming RSSI (per-beacon Q/R applied)...');
+    }
 
     // 4. Stream raw RSSI events at high frequency (per-beacon stage 1
     //    Kalman filtering happens server-side inside the pipeline).

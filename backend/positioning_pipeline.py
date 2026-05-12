@@ -5,6 +5,10 @@ Stage 1 — per-beacon RSSI smoothing:
     One RssiKalmanFilter per beacon_id. Absorbs the high-frequency
     noisy RSSI stream coming straight off the BLE radio.
 
+    Each beacon can have its own Q/R noise parameters (measured from
+    the RSSI Profile screen). If a beacon has none, the pipeline's
+    global default (q_rssi, r_rssi passed to __init__) is used.
+
 Stage 2 — position smoothing:
     Rolling median filter over the trilaterated (x, y). x and y are
     smoothed independently so a single outlier on either axis cannot
@@ -64,7 +68,10 @@ class PositioningPipeline:
         beacon_positions: { beacon_id: {"name": str, "x": float, "y": float} }
             Known anchor coordinates. Beacons not in this dict are ignored
             (call add_beacon() later if you discover them dynamically).
-        q_rssi, r_rssi: noise params for per-beacon RSSI Kalman filters.
+            Entries may optionally include "q" and "r" floats to override
+            the global RSSI Kalman noise params for that beacon.
+        q_rssi, r_rssi: GLOBAL fallback noise params for per-beacon RSSI
+            Kalman filters. Used only when a beacon has no specific q/r set.
         q_position, r_position: accepted for backward compatibility with
             callers that still pass position-Kalman tuning. They are NOT
             used — stage 2 is a median filter and has no Q/R.
@@ -73,7 +80,21 @@ class PositioningPipeline:
         """
         del q_position, r_position  # legacy args, intentionally ignored
 
-        self._beacon_positions: dict = dict(beacon_positions or {})
+        self._beacon_positions: dict = {}
+        self._beacon_kf_params: dict = {}   # beacon_id → {"q": float, "r": float}
+        for bid, cfg in (beacon_positions or {}).items():
+            self._beacon_positions[bid] = {
+                "name": str(cfg.get("name", bid)),
+                "x": float(cfg["x"]),
+                "y": float(cfg["y"]),
+            }
+            q_b, r_b = self._extract_qr(cfg)
+            if q_b is not None or r_b is not None:
+                self._beacon_kf_params[bid] = {
+                    "q": q_b if q_b is not None else float(q_rssi),
+                    "r": r_b if r_b is not None else float(r_rssi),
+                }
+
         self._q_rssi = float(q_rssi)
         self._r_rssi = float(r_rssi)
         self._beacon_timeout_s = float(beacon_timeout_s)
@@ -90,18 +111,50 @@ class PositioningPipeline:
 
     # ── Beacon registry ─────────────────────────────────────────────
 
-    def add_beacon(self, beacon_id: str, name: str, x: float, y: float) -> None:
-        """Register or update a beacon's known position."""
+    @staticmethod
+    def _extract_qr(entry: dict):
+        """Pull optional q/r floats from a beacon dict. Returns (q|None, r|None)."""
+        q_raw = entry.get("q")
+        r_raw = entry.get("r")
+        try:
+            q_val = float(q_raw) if q_raw is not None else None
+        except (TypeError, ValueError):
+            q_val = None
+        try:
+            r_val = float(r_raw) if r_raw is not None else None
+        except (TypeError, ValueError):
+            r_val = None
+        return q_val, r_val
+
+    def add_beacon(
+        self,
+        beacon_id: str,
+        name: str,
+        x: float,
+        y: float,
+        q: Optional[float] = None,
+        r: Optional[float] = None,
+    ) -> None:
+        """Register or update a beacon's known position (and optional Kalman params)."""
         with self._lock:
             self._beacon_positions[beacon_id] = {
                 "name": str(name),
                 "x": float(x),
                 "y": float(y),
             }
+            if q is not None or r is not None:
+                self._beacon_kf_params[beacon_id] = {
+                    "q": float(q) if q is not None else self._q_rssi,
+                    "r": float(r) if r is not None else self._r_rssi,
+                }
+                # Drop any cached filter so the new noise params take effect on
+                # the next reading rather than persisting the old Q/R covariance.
+                self._filters.pop(beacon_id, None)
 
     def remove_beacon(self, beacon_id: str) -> None:
         with self._lock:
             self._beacon_positions.pop(beacon_id, None)
+            self._beacon_kf_params.pop(beacon_id, None)
             self._filters.pop(beacon_id, None)
             self._last_filtered.pop(beacon_id, None)
             self._last_seen.pop(beacon_id, None)
@@ -109,14 +162,16 @@ class PositioningPipeline:
     def replace_beacons(self, beacons: list) -> None:
         """
         Wipe the registry and replace it with a fresh set of beacons.
-        `beacons` is a list of dicts with keys: id, name, x, y.
+        `beacons` is a list of dicts with keys: id, name, x, y, and
+        optionally `q` and `r` (per-beacon 1D Kalman noise overrides).
 
         Per-beacon RSSI filters are cleared so a new tracking session
-        starts cold. The position Kalman filter is NOT reset here —
+        starts cold. The position median filter is NOT reset here —
         call reset_position_filter() if you want that too.
         """
         with self._lock:
             self._beacon_positions = {}
+            self._beacon_kf_params.clear()
             self._filters.clear()
             self._last_filtered.clear()
             self._last_seen.clear()
@@ -129,6 +184,12 @@ class PositioningPipeline:
                     "x": float(b["x"]),
                     "y": float(b["y"]),
                 }
+                q_b, r_b = self._extract_qr(b)
+                if q_b is not None or r_b is not None:
+                    self._beacon_kf_params[bid] = {
+                        "q": q_b if q_b is not None else self._q_rssi,
+                        "r": r_b if r_b is not None else self._r_rssi,
+                    }
 
     # ── Stage 1: ingest raw RSSI ────────────────────────────────────
 
@@ -200,7 +261,10 @@ class PositioningPipeline:
 
         kf = self._filters.get(beacon_id)
         if kf is None:
-            kf = RssiKalmanFilter(q_value=self._q_rssi, r_value=self._r_rssi)
+            override = self._beacon_kf_params.get(beacon_id)
+            q_for_beacon = override["q"] if override else self._q_rssi
+            r_for_beacon = override["r"] if override else self._r_rssi
+            kf = RssiKalmanFilter(q_value=q_for_beacon, r_value=r_for_beacon)
             self._filters[beacon_id] = kf
 
         filtered = kf.update(rssi)
@@ -364,6 +428,50 @@ class PositioningPipeline:
         """
         del q, r
 
+    def set_beacon_kalman_params(
+        self,
+        beacon_id: str,
+        q: Optional[float] = None,
+        r: Optional[float] = None,
+    ) -> bool:
+        """Live-tune the per-beacon 1D Kalman Q/R for `beacon_id`.
+
+        Returns True if the beacon was registered and its filter was
+        rebuilt with the new params; False if the beacon is unknown.
+        Passing both q and r as None clears the override and the beacon
+        falls back to the pipeline's global default.
+        """
+        with self._lock:
+            if beacon_id not in self._beacon_positions:
+                return False
+            if q is None and r is None:
+                self._beacon_kf_params.pop(beacon_id, None)
+            else:
+                existing = self._beacon_kf_params.get(beacon_id, {})
+                self._beacon_kf_params[beacon_id] = {
+                    "q": float(q) if q is not None else existing.get("q", self._q_rssi),
+                    "r": float(r) if r is not None else existing.get("r", self._r_rssi),
+                }
+            # Force a rebuild so the new noise params take effect immediately.
+            self._filters.pop(beacon_id, None)
+            return True
+
+    def get_beacon_kalman_params(self, beacon_id: str) -> dict:
+        """Return the Q/R the pipeline would use for this beacon right now."""
+        with self._lock:
+            override = self._beacon_kf_params.get(beacon_id)
+            if override:
+                return {
+                    "q": override["q"],
+                    "r": override["r"],
+                    "source": "beacon_override",
+                }
+            return {
+                "q": self._q_rssi,
+                "r": self._r_rssi,
+                "source": "global_default",
+            }
+
     def get_status(self) -> dict:
         """
         Diagnostic snapshot of the pipeline. Useful for inspecting which
@@ -375,12 +483,17 @@ class PositioningPipeline:
             window_full = (
                 len(self._position_window_x) >= POSITION_MEDIAN_WINDOW
             )
+            per_beacon_params = {
+                bid: {"q": p["q"], "r": p["r"]}
+                for bid, p in self._beacon_kf_params.items()
+            }
             return {
                 "registered_beacons": list(self._beacon_positions.keys()),
                 "active_beacons": list(self._last_seen.keys()),
                 "filtered_rssi": dict(self._last_filtered),
                 "rssi_q": self._q_rssi,
                 "rssi_r": self._r_rssi,
+                "beacon_kalman_params": per_beacon_params,
                 "position_median_window": POSITION_MEDIAN_WINDOW,
                 "position_window_fill": len(self._position_window_x),
                 "converged": window_full,

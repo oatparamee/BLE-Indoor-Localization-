@@ -53,6 +53,11 @@ export interface PipelineBeaconSetup {
   name: string;
   x: number;
   y: number;
+  /** Optional per-beacon 1D Kalman process noise. Backend falls back to
+   *  the pipeline's global default when omitted. */
+  q?: number;
+  /** Optional per-beacon 1D Kalman measurement noise. Same rules as q. */
+  r?: number;
 }
 
 export interface RssiEvent {
@@ -126,4 +131,8 @@ export const api = {
   /** Live-tune Q and/or R on the pipeline's position Kalman filter. */
   pipelineKalmanUpdate: (params: {Q?: number; R?: number}) =>
     post('/pipeline/kalman/update', params),
+
+  /** Live-tune one beacon's 1D Kalman q/r without re-running /pipeline/setup. */
+  pipelineBeaconKalman: (beacon_id: string, q: number | null, r: number | null) =>
+    post('/pipeline/beacon/kalman', {beacon_id, q, r}),
 };

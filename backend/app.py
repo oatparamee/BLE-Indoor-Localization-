@@ -17,12 +17,14 @@
 
   New two-stage pipeline (per-beacon RSSI KF -> weighted trilateration ->
   rolling median over (x,y)):
-    POST /pipeline/setup          register beacon coordinates for a session
-    POST /rssi/events             ingest a batch of {beacon_id, rssi} events
-    GET  /position/latest         compute + return current smoothed position
-    POST /pipeline/reset          clear all per-beacon filters + median window
-    GET  /pipeline/status         diagnostic snapshot
-    POST /pipeline/kalman/update  deprecated no-op (median filter has no Q/R)
+    POST /pipeline/setup            register beacon coordinates (and optional
+                                    per-beacon RSSI Kalman q/r) for a session
+    POST /rssi/events               ingest a batch of {beacon_id, rssi} events
+    GET  /position/latest           compute + return current smoothed position
+    POST /pipeline/reset            clear all per-beacon filters + median window
+    GET  /pipeline/status           diagnostic snapshot
+    POST /pipeline/beacon/kalman    live-tune one beacon's 1D Kalman q/r
+    POST /pipeline/kalman/update    deprecated no-op (median filter has no Q/R)
 
   Misc:
     GET  /health                  simple health check
@@ -223,15 +225,23 @@ def pipeline_setup():
 
         {
             "beacons": [
-                {"id": "AA:BB:...", "name": "Beacon_A", "x": 0.0, "y": 0.0},
+                {
+                    "id": "AA:BB:...",
+                    "name": "Beacon_A",
+                    "x": 0.0,
+                    "y": 0.0,
+                    "q": 0.7143,   # optional — per-beacon 1D KF process noise
+                    "r": 1.29      # optional — per-beacon 1D KF measurement noise
+                },
                 ...
             ],
             "reset_position_filter": true
         }
 
     Replaces any previously registered beacons. Per-beacon RSSI filters
-    are cleared. By default the position Kalman filter is also reset so
-    a fresh session starts cold.
+    are cleared. By default the position median filter is also reset so
+    a fresh session starts cold. Beacons with no q/r fall back to the
+    pipeline's global default (q_rssi / r_rssi).
     """
     data = request.get_json(force=True)
     beacons = data.get("beacons", [])
@@ -381,6 +391,41 @@ def pipeline_reset():
 def pipeline_status():
     """Diagnostic snapshot of the pipeline."""
     return jsonify(pipeline.get_status())
+
+
+@app.route("/pipeline/beacon/kalman", methods=["POST"])
+def pipeline_beacon_kalman():
+    """Live-tune a single beacon's 1D Kalman q/r without re-setup.
+
+    Body shape:
+        { "beacon_id": "AA:BB:...", "q": 0.71, "r": 1.29 }
+
+    Passing q and r both null clears the override and the beacon falls
+    back to the pipeline's global default. Returns 404 if the beacon
+    is not currently registered.
+    """
+    data = request.get_json(force=True) or {}
+    beacon_id = data.get("beacon_id") or data.get("id")
+    if not beacon_id:
+        return jsonify({"error": "beacon_id is required"}), 400
+    q = data.get("q")
+    r = data.get("r")
+    try:
+        q_val = float(q) if q is not None else None
+        r_val = float(r) if r is not None else None
+    except (TypeError, ValueError):
+        return jsonify({"error": "q and r must be numeric or null"}), 400
+
+    ok = pipeline.set_beacon_kalman_params(str(beacon_id), q=q_val, r=r_val)
+    if not ok:
+        return jsonify({
+            "error": f"beacon '{beacon_id}' is not registered; call /pipeline/setup first",
+        }), 404
+    return jsonify({
+        "status": "updated",
+        "beacon_id": str(beacon_id),
+        "params": pipeline.get_beacon_kalman_params(str(beacon_id)),
+    })
 
 
 @app.route("/pipeline/kalman/update", methods=["POST"])
