@@ -32,7 +32,7 @@ BEACONS = {
 
 # Path-loss model used to fake RSSI from a known true position.
 RSSI_D0 = -63
-N = 2.3
+N = 1.3
 NOISE_STD = 4.0   # dB — typical raw RSSI noise
 
 
