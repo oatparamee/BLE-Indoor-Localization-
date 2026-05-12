@@ -28,4 +28,4 @@ BEACONS = {
 RSSI_D0 = -63
 
 # Path loss exponent — replace with real measurements later
-N = 2.3
+N = 1.3

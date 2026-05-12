@@ -5,7 +5,6 @@ import {
   TouchableOpacity,
   ScrollView,
   StyleSheet,
-  TextInput,
 } from 'react-native';
 import {bleScanner} from '../services/bleScanner';
 import {api, PipelineBeaconSetup} from '../services/api';
@@ -25,10 +24,6 @@ const POSITION_POLL_INTERVAL_MS = 500;
 export default function PositionScreen() {
   const [tracking, setTracking] = useState(false);
   const [positionData, setPositionData] = useState<PositionData | null>(null);
-  const [qValue, setQValue] = useState(0.01);
-  const [rValue, setRValue] = useState(1.0);
-  const [qInput, setQInput] = useState('0.01');
-  const [rInput, setRInput] = useState('1');
   const [converged, setConverged] = useState(false);
   const [error, setError] = useState('');
   const [statusMsg, setStatusMsg] = useState('');
@@ -71,12 +66,6 @@ export default function PositionScreen() {
   const loadPipelineStatus = async () => {
     try {
       const status = await api.pipelineStatus();
-      const q = status.position_q ?? 0.01;
-      const r = status.position_r_current ?? 1.0;
-      setQValue(q);
-      setRValue(r);
-      setQInput(String(q));
-      setRInput(String(r));
       setConverged(status.converged ?? false);
     } catch {
       // Backend may not be reachable yet — leave defaults in place.
@@ -106,7 +95,7 @@ export default function PositionScreen() {
     }
 
     // 2. Register beacons with the backend pipeline. This wipes any
-    //    previously registered beacons and resets the position KF so
+    //    previously registered beacons and resets the median window so
     //    each tracking session starts cold.
     try {
       await api.pipelineSetup(beacons, {resetPositionFilter: true});
@@ -137,7 +126,7 @@ export default function PositionScreen() {
       }
     }, RSSI_FLUSH_INTERVAL_MS);
 
-    // 5. Poll for the current smoothed position (stage 2 KF runs on
+    // 5. Poll for the current smoothed position (stage 2 median filter runs on
     //    every call, on top of the latest filtered RSSI per beacon).
     positionPollIntervalRef.current = setInterval(async () => {
       try {
@@ -165,49 +154,13 @@ export default function PositionScreen() {
     setStatusMsg('Tracking stopped.');
   }, [stopAllIntervals]);
 
-  const handleQChange = useCallback(async (value: number) => {
-    setQValue(value);
-    setQInput(String(value));
-    try {
-      await api.pipelineKalmanUpdate({Q: value});
-    } catch {}
-  }, []);
-
-  const handleRChange = useCallback(async (value: number) => {
-    setRValue(value);
-    setRInput(String(value));
-    try {
-      await api.pipelineKalmanUpdate({R: value});
-    } catch {}
-  }, []);
-
-  const applyQInput = useCallback(async () => {
-    const parsed = Number(qInput.trim());
-    if (!Number.isFinite(parsed)) {
-      setError('Q must be a valid number.');
-      return;
-    }
-    setError('');
-    await handleQChange(parsed);
-  }, [handleQChange, qInput]);
-
-  const applyRInput = useCallback(async () => {
-    const parsed = Number(rInput.trim());
-    if (!Number.isFinite(parsed)) {
-      setError('R must be a valid number.');
-      return;
-    }
-    setError('');
-    await handleRChange(parsed);
-  }, [handleRChange, rInput]);
-
   const handleReset = useCallback(async () => {
     try {
       await api.pipelineReset();
       setPositionData(null);
       setConverged(false);
       setActiveBeacons([]);
-      setStatusMsg('Pipeline reset (per-beacon RSSI KFs + position KF).');
+      setStatusMsg('Pipeline reset (per-beacon RSSI KFs + median window).');
     } catch (err: any) {
       setError(err.message);
     }
@@ -227,7 +180,7 @@ export default function PositionScreen() {
     <ScrollView style={styles.container}>
       <Text style={styles.title}>Position</Text>
       <Text style={styles.subtitle}>
-        Per-beacon RSSI Kalman → trilateration → position Kalman
+        Per-beacon RSSI Kalman → weighted trilateration → median filter
       </Text>
 
       <TouchableOpacity
@@ -287,7 +240,7 @@ export default function PositionScreen() {
           {diffX !== null && diffY !== null ? (
             <View style={styles.card}>
               <Text style={styles.cardTitle}>
-                Kalman Effect (|raw − smooth|)
+                Median Filter Effect (|raw - smooth|)
               </Text>
               <View style={styles.row}>
                 <Text style={styles.rowLabel}>Δx:</Text>
@@ -320,59 +273,9 @@ export default function PositionScreen() {
         </>
       ) : null}
 
-      <View style={styles.card}>
-        <Text style={styles.cardTitle}>Kalman Parameters</Text>
-
-        <View style={styles.sliderSection}>
-          <View style={styles.sliderHeader}>
-            <Text style={styles.sliderLabel}>Q (process noise):</Text>
-            <Text style={styles.sliderValue}>{qValue}</Text>
-          </View>
-          <View style={styles.inputRow}>
-            <TextInput
-              style={styles.numberInput}
-              value={qInput}
-              onChangeText={setQInput}
-              keyboardType="numeric"
-              placeholder="Enter Q value"
-              placeholderTextColor="#6e7681"
-              autoCapitalize="none"
-              autoCorrect={false}
-              onSubmitEditing={applyQInput}
-            />
-            <TouchableOpacity style={styles.applyButton} onPress={applyQInput}>
-              <Text style={styles.applyButtonText}>Apply</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-
-        <View style={styles.sliderSection}>
-          <View style={styles.sliderHeader}>
-            <Text style={styles.sliderLabel}>R (measurement noise):</Text>
-            <Text style={styles.sliderValue}>{rValue}</Text>
-          </View>
-          <View style={styles.inputRow}>
-            <TextInput
-              style={styles.numberInput}
-              value={rInput}
-              onChangeText={setRInput}
-              keyboardType="numeric"
-              placeholder="Enter R value"
-              placeholderTextColor="#6e7681"
-              autoCapitalize="none"
-              autoCorrect={false}
-              onSubmitEditing={applyRInput}
-            />
-            <TouchableOpacity style={styles.applyButton} onPress={applyRInput}>
-              <Text style={styles.applyButtonText}>Apply</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-
-        <TouchableOpacity style={styles.buttonDanger} onPress={handleReset}>
-          <Text style={styles.buttonText}>Reset Kalman Filter</Text>
-        </TouchableOpacity>
-      </View>
+      <TouchableOpacity style={styles.buttonDanger} onPress={handleReset}>
+        <Text style={styles.buttonText}>Reset Pipeline Filters</Text>
+      </TouchableOpacity>
 
       <View style={{height: 40}} />
     </ScrollView>
@@ -493,48 +396,5 @@ const styles = StyleSheet.create({
     fontFamily: 'monospace',
     fontWeight: '700',
     marginBottom: 2,
-  },
-  sliderSection: {
-    marginBottom: 16,
-  },
-  sliderHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 4,
-  },
-  sliderLabel: {
-    fontSize: 14,
-    color: '#c9d1d9',
-  },
-  sliderValue: {
-    fontSize: 14,
-    color: '#58a6ff',
-    fontWeight: '700',
-    fontFamily: 'monospace',
-  },
-  inputRow: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  numberInput: {
-    flex: 1,
-    height: 40,
-    borderWidth: 1,
-    borderColor: '#30363d',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    color: '#e6edf3',
-    backgroundColor: '#0d1117',
-    fontFamily: 'monospace',
-  },
-  applyButton: {
-    paddingHorizontal: 14,
-    borderRadius: 8,
-    backgroundColor: '#1f6feb',
-    justifyContent: 'center',
-  },
-  applyButtonText: {
-    color: '#ffffff',
-    fontWeight: '600',
   },
 });
