@@ -28,7 +28,7 @@ BEACONS = {
 RSSI_D0 = -63
 
 # Path loss exponent — replace with real measurements later
-N = 2.3
+N = 1.3
 
 # Rolling window size for the position median filter (stage 2 of the
 # pipeline). Larger = smoother but more lag; smaller = snappier but
