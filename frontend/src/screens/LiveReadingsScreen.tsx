@@ -50,6 +50,9 @@ export default function LiveReadingsScreen() {
         unsubRef.current();
         unsubRef.current = null;
       }
+      historyRef.current = {};
+      setReadings({});
+      setNearbyList([]);
       setScanning(false);
     } else {
       setScanning(true);
