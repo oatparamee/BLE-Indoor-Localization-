@@ -18,6 +18,14 @@ import {View, Text, TouchableOpacity, ScrollView, StyleSheet} from 'react-native
 import {bleScanner, BeaconReading} from '../services/bleScanner';
 import {rssiToDistance} from '../services/distance';
 import {BEACONS, RSSI_D0, N} from '../config/beacons';
+import RssiLineChart from '../components/RssiLineChart';
+
+const MAX_HISTORY = 50;
+
+interface RssiHistory {
+  raw: number[];
+  smoothed: number[];
+}
 
 export default function LiveReadingsScreen() {
   const [readings, setReadings] = useState<Record<string, BeaconReading>>({});
@@ -25,6 +33,7 @@ export default function LiveReadingsScreen() {
   const [scanning, setScanning] = useState(false);
   const [showOnlyKnown, setShowOnlyKnown] = useState(false);
   const unsubRef = useRef<(() => void) | null>(null);
+  const historyRef = useRef<Record<string, RssiHistory>>({});
 
   useEffect(() => {
     return () => {
@@ -45,6 +54,20 @@ export default function LiveReadingsScreen() {
     } else {
       setScanning(true);
       unsubRef.current = bleScanner.subscribe((newReadings, nearby) => {
+        for (const [id, reading] of Object.entries(newReadings)) {
+          if (!historyRef.current[id]) {
+            historyRef.current[id] = {raw: [], smoothed: []};
+          }
+          const hist = historyRef.current[id];
+          if (reading.rawRssi !== null) {
+            hist.raw.push(reading.rawRssi);
+            if (hist.raw.length > MAX_HISTORY) hist.raw.shift();
+          }
+          if (reading.smoothedRssi !== null) {
+            hist.smoothed.push(reading.smoothedRssi);
+            if (hist.smoothed.length > MAX_HISTORY) hist.smoothed.shift();
+          }
+        }
         setReadings({...newReadings});
         setNearbyList(nearby);
       });
@@ -170,9 +193,16 @@ export default function LiveReadingsScreen() {
                 <View style={styles.detailRow}>
                   <Text style={styles.detailLabel}>Buffer:</Text>
                   <Text style={styles.detailValueDim}>
-                    {beacon.rssiBuffer?.length ?? 0} / 5 samples
+                    {beacon.rssiBuffer?.length ?? 0} / {MAX_HISTORY} samples
                   </Text>
                 </View>
+              </View>
+
+              <View style={styles.chartContainer}>
+                <RssiLineChart
+                  rawHistory={historyRef.current[device.id]?.raw ?? []}
+                  smoothedHistory={historyRef.current[device.id]?.smoothed ?? []}
+                />
               </View>
             </View>
           );
@@ -337,6 +367,12 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#6e7681',
     fontFamily: 'monospace',
+  },
+  chartContainer: {
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#21262d',
   },
   infoBox: {
     marginTop: 24,
