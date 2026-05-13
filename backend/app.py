@@ -37,8 +37,13 @@ from flask_cors import CORS
 from config import BEACONS, RSSI_D0, N
 from calibration import CalibrationStore
 from debug_log import debug_log
+from fingerprint import FingerprintStore
+from fingerprint_match import match as fingerprint_match
+from fingerprint_pipeline import FingerprintPipeline
 from kalman_filter import AdaptiveKalmanFilter
 from positioning_pipeline import PositioningPipeline
+from r_estimator import estimate_r_loo
+from survey import SurveyCollector
 from trilateration import trilaterate, trilaterate_with_positions
 
 # Hysteresis: only swap a beacon out of the active set if the challenger
@@ -95,6 +100,17 @@ pipeline = PositioningPipeline(
     r_position=1.0,
     beacon_timeout_s=5.0,
 )
+
+# Fingerprint survey infrastructure — independent of the live pipeline.
+# Survey samples are stored raw (no 1D KF) so the recorded variance
+# reflects true sensor noise. See backend/fingerprint.py and survey.py.
+fingerprint_store = FingerprintStore()
+survey_collector = SurveyCollector()
+
+# Fingerprint-based live tracking pipeline. Owned by /fp/* routes; reads
+# the same FingerprintStore the survey writes to. R is seeded from
+# leave-one-out cross-val the first time /fp/start is called.
+fp_pipeline = FingerprintPipeline(store=fingerprint_store)
 
 
 # ---------- Health ----------
@@ -451,6 +467,307 @@ def pipeline_kalman_update():
         "position_median_window": status.get("position_median_window"),
         "position_window_fill": status.get("position_window_fill"),
     })
+
+
+# ---------- Fingerprint survey (grid-based site survey) ----------
+
+@app.route("/survey/start", methods=["POST"])
+def survey_start():
+    """Start collecting RSSI samples for ONE grid cell.
+
+    Body: { "x": 0.0, "y": 0.0, "samples_target": 50 }
+
+    Replaces any in-progress session. The frontend specifies samples_target
+    per cell — there is no global default beyond the minimum of 1.
+    """
+    data = request.get_json(force=True) or {}
+    try:
+        x = float(data["x"])
+        y = float(data["y"])
+    except (KeyError, TypeError, ValueError):
+        return jsonify({"error": "x and y are required numbers"}), 400
+    try:
+        samples_target = int(data.get("samples_target", 50))
+    except (TypeError, ValueError):
+        return jsonify({"error": "samples_target must be an integer"}), 400
+
+    snap = survey_collector.start(x, y, samples_target)
+    return jsonify({"status": "survey started", **snap})
+
+
+@app.route("/survey/events", methods=["POST"])
+def survey_events():
+    """Append raw RSSI events to the active survey cell's buffer.
+
+    Body: { "events": [{"beacon_id": "...", "rssi": -67}, ...] }
+        or { "beacon_id": "...", "rssi": -67 } for a single sample.
+
+    Returns 409 if no survey is active.
+    """
+    data = request.get_json(force=True) or {}
+    events = data.get("events")
+    if events is None and "beacon_id" in data and "rssi" in data:
+        events = [{"beacon_id": data["beacon_id"], "rssi": data["rssi"]}]
+    if not isinstance(events, list):
+        return jsonify({"error": "events list required"}), 400
+
+    if not survey_collector.is_active():
+        return jsonify({"error": "no active survey session — call /survey/start"}), 409
+
+    applied = survey_collector.ingest_events(events)
+    snap = survey_collector.progress()
+    return jsonify({"applied": applied, "received": len(events), **(snap or {})})
+
+
+@app.route("/survey/progress", methods=["GET"])
+def survey_progress():
+    snap = survey_collector.progress()
+    if snap is None:
+        return jsonify({"active": False})
+    return jsonify({"active": True, **snap})
+
+
+@app.route("/survey/finalize", methods=["POST"])
+def survey_finalize():
+    """Save the active cell to the fingerprint store and end the session.
+
+    Body (optional): { "expected_beacons": ["BCPro_0", ...] }
+        Beacons listed here but missing from the buffer are stored as null
+        (treated as "not detected at this position") so the cell always
+        carries the full beacon dimension expected by downstream consumers.
+    """
+    data = request.get_json(silent=True) or {}
+    expected = data.get("expected_beacons") or []
+
+    buf = survey_collector.take_buffer()
+    if buf is None:
+        return jsonify({"error": "no active survey session"}), 409
+
+    per_beacon = dict(buf["per_beacon_samples"])
+    for bid in expected:
+        if str(bid) not in per_beacon:
+            per_beacon[str(bid)] = []
+
+    cell = fingerprint_store.upsert_cell(buf["x"], buf["y"], per_beacon)
+    fingerprint_store.save()
+    return jsonify({
+        "status": "cell saved",
+        "cell": cell,
+        "summary": fingerprint_store.summary(),
+    })
+
+
+@app.route("/survey/cancel", methods=["POST"])
+def survey_cancel():
+    was_active = survey_collector.cancel()
+    return jsonify({"status": "cancelled" if was_active else "no active session"})
+
+
+# ---------- Fingerprint store / matcher ----------
+
+@app.route("/fingerprint/cells", methods=["GET"])
+def fingerprint_cells():
+    return jsonify({
+        "cells": fingerprint_store.list_cells(),
+        "summary": fingerprint_store.summary(),
+    })
+
+
+@app.route("/fingerprint/cells/<x>/<y>", methods=["GET", "DELETE"])
+def fingerprint_cell_single(x, y):
+    try:
+        xf = float(x)
+        yf = float(y)
+    except (TypeError, ValueError):
+        return jsonify({"error": "x and y must be numeric"}), 400
+
+    if request.method == "DELETE":
+        removed = fingerprint_store.delete_cell(xf, yf)
+        if removed:
+            fingerprint_store.save()
+        return jsonify({"removed": removed})
+
+    cell = fingerprint_store.get_cell(xf, yf)
+    if cell is None:
+        return jsonify({"error": "cell not found"}), 404
+    return jsonify(cell)
+
+
+@app.route("/fingerprint/clear", methods=["POST"])
+def fingerprint_clear():
+    fingerprint_store.clear()
+    fingerprint_store.save()
+    return jsonify({"status": "fingerprint cleared"})
+
+
+@app.route("/fingerprint/summary", methods=["GET"])
+def fingerprint_summary():
+    return jsonify(fingerprint_store.summary())
+
+
+@app.route("/fingerprint/match", methods=["POST"])
+def fingerprint_match_route():
+    """Estimate position from a current RSSI vector.
+
+    Body: { "rssi": {"BCPro_0": -65, "BCPro_1": -73, ...}, "top_k": 4 }
+        Beacon values may be null — they are floor-substituted at match
+        time so the measurement vector dimension matches #beacons.
+    """
+    data = request.get_json(force=True) or {}
+    rssi = data.get("rssi")
+    if not isinstance(rssi, dict):
+        return jsonify({"error": "rssi dict required"}), 400
+    try:
+        top_k = int(data.get("top_k", 4))
+    except (TypeError, ValueError):
+        return jsonify({"error": "top_k must be an integer"}), 400
+
+    rssi_clean = {}
+    for bid, v in rssi.items():
+        if v is None:
+            rssi_clean[str(bid)] = None
+            continue
+        try:
+            rssi_clean[str(bid)] = float(v)
+        except (TypeError, ValueError):
+            continue
+
+    result = fingerprint_match(fingerprint_store, rssi_clean, top_k=top_k)
+    if result is None:
+        return jsonify({
+            "ready": False,
+            "reason": "no surveyed cells overlap with the requested beacons",
+        })
+    return jsonify({"ready": True, **result})
+
+
+# ---------- Fingerprint pipeline (raw RSSI -> match -> 4D KF) ----------
+
+@app.route("/fp/start", methods=["POST"])
+def fp_start():
+    """Begin a live tracking session against the current fingerprint.
+
+    Body (all optional):
+        {
+            "sigma_a": 0.5,        // process-noise std for 4D KF (m/s^2)
+            "seed_r_from_loo": true // run LOO cross-val and apply R
+        }
+
+    Returns the LOO estimator output (R, RMSE, per-cell residuals) so the
+    frontend can show a quality readout, or null if the survey is too
+    sparse / no LOO seed was requested.
+    """
+    data = request.get_json(silent=True) or {}
+    sigma_a = data.get("sigma_a")
+    if sigma_a is not None:
+        try:
+            fp_pipeline.set_params(sigma_a=float(sigma_a))
+        except (TypeError, ValueError):
+            return jsonify({"error": "sigma_a must be numeric"}), 400
+
+    fp_pipeline.reset()
+
+    estimate = None
+    if data.get("seed_r_from_loo", True):
+        estimate = fp_pipeline.seed_r_from_loo()
+
+    return jsonify({
+        "status": "fp pipeline started",
+        "r_estimate": estimate,
+        "fingerprint_summary": fingerprint_store.summary(),
+    })
+
+
+@app.route("/fp/rssi/events", methods=["POST"])
+def fp_rssi_events():
+    """Stream raw RSSI events into the fingerprint pipeline's latest-value
+    cache. Same payload shape as /rssi/events."""
+    data = request.get_json(force=True) or {}
+    events = data.get("events")
+    if events is None and "beacon_id" in data and "rssi" in data:
+        events = [{"beacon_id": data["beacon_id"], "rssi": data["rssi"]}]
+    if not isinstance(events, list):
+        return jsonify({"error": "events list required"}), 400
+    applied = fp_pipeline.ingest_events(events)
+    return jsonify({"applied": applied, "received": len(events)})
+
+
+@app.route("/fp/position/latest", methods=["GET"])
+def fp_position_latest():
+    """Match the latest RSSI vector against the fingerprint and run the
+    4D KF. Returns ready=true with smoothed (x, y) + velocity, OR
+    ready=false with a reason when no match is possible."""
+    result = fp_pipeline.update_position()
+    if result is None:
+        active = fp_pipeline.get_status().get("active_beacons", [])
+        return jsonify({
+            "ready": False,
+            "reason": (
+                "no active beacons yet"
+                if not active
+                else "fingerprint is empty or no overlap with active beacons"
+            ),
+            "active_beacons": active,
+        })
+    return jsonify({"ready": True, **result})
+
+
+@app.route("/fp/reset", methods=["POST"])
+def fp_reset():
+    fp_pipeline.reset()
+    return jsonify({"status": "fp pipeline reset"})
+
+
+@app.route("/fp/status", methods=["GET"])
+def fp_status():
+    return jsonify(fp_pipeline.get_status())
+
+
+@app.route("/fp/params", methods=["POST"])
+def fp_params():
+    """Manually set sigma_a and/or R.
+
+    Body:
+        {
+            "sigma_a": 0.7,
+            "R": [[0.25, 0.0], [0.0, 0.36]]   // 2x2 measurement noise
+        }
+
+    Either field is optional. Passing `R` switches r_source to "manual"
+    and overrides any LOO-derived value.
+    """
+    data = request.get_json(force=True) or {}
+    sigma_a = data.get("sigma_a")
+    r = data.get("R")
+    try:
+        sa = float(sigma_a) if sigma_a is not None else None
+    except (TypeError, ValueError):
+        return jsonify({"error": "sigma_a must be numeric"}), 400
+
+    if r is not None:
+        try:
+            r_np = [[float(r[0][0]), float(r[0][1])],
+                    [float(r[1][0]), float(r[1][1])]]
+        except (TypeError, ValueError, IndexError):
+            return jsonify({"error": "R must be a 2x2 matrix"}), 400
+    else:
+        r_np = None
+
+    fp_pipeline.set_params(sigma_a=sa, r=r_np)
+    return jsonify({"status": "updated", **fp_pipeline.get_status()})
+
+
+@app.route("/fp/r/estimate", methods=["GET"])
+def fp_r_estimate():
+    """Run LOO cross-val WITHOUT applying the result to the live pipeline.
+    Useful for inspecting expected accuracy before starting tracking."""
+    estimate = estimate_r_loo(fingerprint_store)
+    if estimate is None:
+        return jsonify({
+            "ready": False,
+            "reason": "need at least 4 surveyed cells",
+        })
+    return jsonify({"ready": True, **estimate})
 
 
 # ---------- Run ----------

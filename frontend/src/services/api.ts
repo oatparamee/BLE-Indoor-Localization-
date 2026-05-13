@@ -135,4 +135,48 @@ export const api = {
   /** Live-tune one beacon's 1D Kalman q/r without re-running /pipeline/setup. */
   pipelineBeaconKalman: (beacon_id: string, q: number | null, r: number | null) =>
     post('/pipeline/beacon/kalman', {beacon_id, q, r}),
+
+  // ── Site survey (fingerprint grid collection) ────────────────────
+
+  /** Begin collecting raw RSSI for one grid cell. Replaces any in-progress session. */
+  surveyStart: (x: number, y: number, samples_target: number) =>
+    post('/survey/start', {x, y, samples_target}),
+
+  /** Append raw RSSI events to the active survey cell. */
+  surveyEvents: (events: RssiEvent[]) =>
+    post('/survey/events', {events}),
+
+  /** Per-beacon sample counts vs target for the active session. */
+  surveyProgress: () => get('/survey/progress'),
+
+  /** Save the active cell to the fingerprint store and end the session.
+   *  Pass expected_beacons so beacons that were silent get stored as null. */
+  surveyFinalize: (expected_beacons?: string[]) =>
+    post('/survey/finalize', expected_beacons ? {expected_beacons} : {}),
+
+  /** Discard the active survey session without saving. */
+  surveyCancel: () => post('/survey/cancel', {}),
+
+  // ── Fingerprint store / matcher ──────────────────────────────────
+
+  /** All surveyed cells + global summary (cell count, floor, beacons). */
+  fingerprintCells: () => get('/fingerprint/cells'),
+
+  /** Global summary only — cheap, safe to poll. */
+  fingerprintSummary: () => get('/fingerprint/summary'),
+
+  /** Delete one cell from the fingerprint. */
+  fingerprintDeleteCell: (x: number, y: number) =>
+    fetch(`${getApiUrl()}/fingerprint/cells/${x}/${y}`, {method: 'DELETE'}).then(
+      parseJsonResponse,
+    ),
+
+  /** Wipe the entire fingerprint. */
+  fingerprintClear: () => post('/fingerprint/clear', {}),
+
+  /** Estimate position from a current RSSI vector via Gaussian fingerprint match. */
+  fingerprintMatch: (
+    rssi: Record<string, number | null>,
+    top_k = 4,
+  ) => post('/fingerprint/match', {rssi, top_k}),
 };

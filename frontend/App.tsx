@@ -8,6 +8,7 @@ import CalibrationScreen from './src/screens/CalibrationScreen';
 import RSSIProfileScreen from './src/screens/RSSIProfileScreen';
 import LiveReadingsScreen from './src/screens/LiveReadingsScreen';
 import SetupScreen from './src/screens/SetupScreen';
+import SiteSurveyScreen from './src/screens/SiteSurveyScreen';
 import PositionScreen from './src/screens/PositionScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
 import BoelterNavigationScreen from './src/screens/BoelterNavigationScreen';
@@ -20,8 +21,9 @@ function TabIcon({label, focused}: {label: string; focused: boolean}) {
     Profile: '📊',
     Readings: '📡',
     Beacons: '📌',
+    Survey: '🗺',
     Position: '📍',
-    Navigation: '🗺',
+    Navigation: '🧭',
     Settings: '🔧',
   };
   return (
@@ -112,6 +114,16 @@ export default function App() {
             title: 'Beacon Setup',
             tabBarIcon: ({focused}) => (
               <TabIcon label="Beacons" focused={focused} />
+            ),
+          }}
+        />
+        <Tab.Screen
+          name="Survey"
+          component={SiteSurveyScreen}
+          options={{
+            title: 'Site Survey',
+            tabBarIcon: ({focused}) => (
+              <TabIcon label="Survey" focused={focused} />
             ),
           }}
         />

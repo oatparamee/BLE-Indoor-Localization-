@@ -27,11 +27,11 @@ BEACONS = {
 # Reference RSSI at d0 = 1 meter — replace with real measurements later
 RSSI_D0 = -63
 
-# Path loss exponent — replace with real measurements later
-N = 1.3
-N = 1.3
+# Path loss exponent — calibrate for your environment.
+# Typical: 2.0 (open) / 2.5-3.5 (office) / 4-6 (obstructed).
+N = 2.5
 
 # Rolling window size for the position median filter (stage 2 of the
 # pipeline). Larger = smoother but more lag; smaller = snappier but
-# more jitter. 5 ≈ 2.5 s of lag at 0.5 s update cadence.
-POSITION_MEDIAN_WINDOW = 5
+# more jitter. 10 ≈ 5 s of lag at 0.5 s update cadence.
+POSITION_MEDIAN_WINDOW = 10
