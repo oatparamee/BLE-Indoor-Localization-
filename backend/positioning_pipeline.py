@@ -44,6 +44,12 @@ from debug_log import debug_log
 from rssi_kalman import RssiKalmanFilter
 from trilateration import trilaterate_with_positions
 
+# Hysteresis: after stage 1 KF, only swap a beacon out of the active 3 if a
+# challenger is at least this many dB stronger than the weakest active one.
+# Prevents rapid beacon flipping when filtered RSSI values are close.
+HYSTERESIS_THRESHOLD = 10.0
+TOP_N = 3
+
 
 class PositioningPipeline:
     """
@@ -106,6 +112,10 @@ class PositioningPipeline:
         self._position_window_x: deque = deque(maxlen=POSITION_MEDIAN_WINDOW)
         self._position_window_y: deque = deque(maxlen=POSITION_MEDIAN_WINDOW)
         self._last_result: Optional[dict] = None
+
+        # Hysteresis state: ids of the beacons we used last time, so we can
+        # require a strong RSSI margin before swapping any of them out.
+        self._last_active_ids: list = []
 
         self._lock = threading.Lock()
 
@@ -175,6 +185,7 @@ class PositioningPipeline:
             self._filters.clear()
             self._last_filtered.clear()
             self._last_seen.clear()
+            self._last_active_ids = []
             for b in beacons:
                 bid = str(b.get("id") or b.get("name") or "").strip()
                 if not bid:
@@ -296,12 +307,12 @@ class PositioningPipeline:
         with self._lock:
             self._prune_stale_locked()
 
-            beacons_list = []
+            candidates = []
             for beacon_id, rssi in self._last_filtered.items():
                 cfg = self._beacon_positions.get(beacon_id)
                 if cfg is None:
                     continue
-                beacons_list.append(
+                candidates.append(
                     {
                         "id": beacon_id,
                         "name": cfg.get("name", beacon_id),
@@ -310,6 +321,9 @@ class PositioningPipeline:
                         "rssi": rssi,
                     }
                 )
+
+            beacons_list = self._select_top_n_with_hysteresis_locked(candidates)
+            self._last_active_ids = [b["id"] for b in beacons_list]
 
             if len(beacons_list) < 3:
                 # region agent log
@@ -383,6 +397,42 @@ class PositioningPipeline:
             self._last_result = result
             return result
 
+    def _select_top_n_with_hysteresis_locked(self, all_beacons: list) -> list:
+        """Pick TOP_N beacons by filtered RSSI with hysteresis.
+
+        A challenger only replaces a currently-active beacon if its filtered
+        RSSI is at least HYSTERESIS_THRESHOLD dB stronger than the weakest
+        currently-active beacon. Caller MUST hold self._lock.
+        """
+        if len(all_beacons) <= TOP_N:
+            return list(all_beacons)
+
+        beacon_map = {b["id"]: b for b in all_beacons}
+        active = [
+            beacon_map[bid] for bid in self._last_active_ids if bid in beacon_map
+        ]
+
+        if len(active) < TOP_N:
+            # No stable history yet — fall back to strongest TOP_N by RSSI.
+            return sorted(all_beacons, key=lambda b: b["rssi"], reverse=True)[:TOP_N]
+
+        active_ids = {b["id"] for b in active}
+        challengers = sorted(
+            [b for b in all_beacons if b["id"] not in active_ids],
+            key=lambda b: b["rssi"],
+            reverse=True,
+        )
+
+        result = list(active)
+        for challenger in challengers:
+            weakest = min(result, key=lambda b: b["rssi"])
+            if challenger["rssi"] > weakest["rssi"] + HYSTERESIS_THRESHOLD:
+                result.remove(weakest)
+                result.append(challenger)
+            else:
+                break  # Remaining challengers are even weaker — stop early.
+        return result
+
     # ── Inspection / control ────────────────────────────────────────
 
     @property
@@ -407,6 +457,7 @@ class PositioningPipeline:
             self._position_window_x.clear()
             self._position_window_y.clear()
             self._last_result = None
+            self._last_active_ids = []
 
     def reset_all(self) -> None:
         """Clear every filter and cached value. Beacon registry is kept."""
@@ -417,6 +468,7 @@ class PositioningPipeline:
             self._position_window_x.clear()
             self._position_window_y.clear()
             self._last_result = None
+            self._last_active_ids = []
 
     def set_position_kalman_params(
         self, q: Optional[float] = None, r: Optional[float] = None
