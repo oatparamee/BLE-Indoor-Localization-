@@ -272,7 +272,7 @@ export default function SetupScreen() {
                   style={styles.fieldInput}
                   value={xInput}
                   onChangeText={setXInput}
-                  keyboardType="numeric"
+                  keyboardType="default"
                   placeholder="0.0"
                   placeholderTextColor="#6e7681"
                 />
@@ -284,7 +284,7 @@ export default function SetupScreen() {
                   style={styles.fieldInput}
                   value={yInput}
                   onChangeText={setYInput}
-                  keyboardType="numeric"
+                  keyboardType="default"
                   placeholder="0.0"
                   placeholderTextColor="#6e7681"
                 />
