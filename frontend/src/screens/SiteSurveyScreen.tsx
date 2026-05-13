@@ -1,4 +1,4 @@
-import React, {useState, useEffect, useRef, useCallback, useMemo} from 'react';
+import React, {useState, useEffect, useRef, useCallback} from 'react';
 import {
   View,
   Text,
@@ -9,7 +9,6 @@ import {
   Alert,
 } from 'react-native';
 import {useFocusEffect} from '@react-navigation/native';
-import Svg, {Rect, Circle, G, Text as SvgText, Line as SvgLine} from 'react-native-svg';
 import {bleScanner} from '../services/bleScanner';
 import {api} from '../services/api';
 import {loadBeaconConfig, SavedBeacon} from '../config/beaconConfig';
@@ -241,43 +240,6 @@ export default function SiteSurveyScreen() {
     );
   };
 
-  // ── SVG layout ─────────────────────────────────────────────────
-
-  const PADDING = 30;
-  const SCALE = 50;
-
-  const bbox = useMemo(() => {
-    const points: {x: number; y: number}[] = [...beacons];
-    surveyedCells.forEach(c => points.push({x: c.x, y: c.y}));
-    if (coordsValid) points.push({x: x as number, y: y as number});
-    if (points.length === 0) return null;
-    const xs = points.map(p => p.x);
-    const ys = points.map(p => p.y);
-    // Add 1 m of margin so corner points aren't flush with the edge.
-    return {
-      xMin: Math.floor(Math.min(...xs)) - 1,
-      xMax: Math.ceil(Math.max(...xs)) + 1,
-      yMin: Math.floor(Math.min(...ys)) - 1,
-      yMax: Math.ceil(Math.max(...ys)) + 1,
-    };
-  }, [beacons, surveyedCells, x, y, coordsValid]);
-
-  const svgW = bbox ? (bbox.xMax - bbox.xMin) * SCALE + PADDING * 2 : 240;
-  const svgH = bbox ? (bbox.yMax - bbox.yMin) * SCALE + PADDING * 2 : 240;
-  const toSvgX = (px: number) => PADDING + (px - (bbox?.xMin ?? 0)) * SCALE;
-  const toSvgY = (py: number) =>
-    svgH - PADDING - (py - (bbox?.yMin ?? 0)) * SCALE;
-
-  // Generate integer 1 m gridlines for the visual reference.
-  const gridLines = useMemo(() => {
-    if (!bbox) return {vertical: [], horizontal: []};
-    const vertical: number[] = [];
-    const horizontal: number[] = [];
-    for (let gx = bbox.xMin; gx <= bbox.xMax; gx += 1) vertical.push(gx);
-    for (let gy = bbox.yMin; gy <= bbox.yMax; gy += 1) horizontal.push(gy);
-    return {vertical, horizontal};
-  }, [bbox]);
-
   // ── Render ────────────────────────────────────────────────────
 
   return (
@@ -393,117 +355,38 @@ export default function SiteSurveyScreen() {
         )}
       </View>
 
-      {/* Map visualization */}
-      {bbox && (
+      {/* Saved points list */}
+      {surveyedCells.length > 0 && (
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>
-            Map · {surveyedCells.length} point{surveyedCells.length === 1 ? '' : 's'} surveyed
+            Saved points ({surveyedCells.length})
           </Text>
-          <ScrollView horizontal style={styles.svgScroll}>
-            <Svg width={svgW} height={svgH}>
-              {/* Reference 1 m gridlines */}
-              {gridLines.vertical.map(gx => (
-                <SvgLine
-                  key={`v${gx}`}
-                  x1={toSvgX(gx)}
-                  y1={PADDING / 2}
-                  x2={toSvgX(gx)}
-                  y2={svgH - PADDING / 2}
-                  stroke="#21262d"
-                  strokeWidth={1}
-                />
-              ))}
-              {gridLines.horizontal.map(gy => (
-                <SvgLine
-                  key={`h${gy}`}
-                  x1={PADDING / 2}
-                  y1={toSvgY(gy)}
-                  x2={svgW - PADDING / 2}
-                  y2={toSvgY(gy)}
-                  stroke="#21262d"
-                  strokeWidth={1}
-                />
-              ))}
-
-              {/* Surveyed points */}
-              {surveyedCells.map(c => (
-                <G key={`c${c.x},${c.y}`}>
-                  <Rect
-                    x={toSvgX(c.x) - 10}
-                    y={toSvgY(c.y) - 10}
-                    width={20}
-                    height={20}
-                    fill="#1f5430"
-                    stroke="#3fb950"
-                    strokeWidth={1}
-                    onPress={() => deletePoint(c)}
-                  />
-                  <SvgText
-                    x={toSvgX(c.x)}
-                    y={toSvgY(c.y) + 22}
-                    fill="#8b949e"
-                    fontSize={9}
-                    textAnchor="middle">
-                    ({c.x},{c.y})
-                  </SvgText>
-                </G>
-              ))}
-
-              {/* Pending point (from typed input) */}
-              {coordsValid && (
-                <Circle
-                  cx={toSvgX(x as number)}
-                  cy={toSvgY(y as number)}
-                  r={9}
-                  fill="#d2992233"
-                  stroke="#d29922"
-                  strokeWidth={2}
-                />
-              )}
-
-              {/* Beacon anchors */}
-              {beacons.map(b => (
-                <G key={b.id}>
-                  <Circle
-                    cx={toSvgX(b.x)}
-                    cy={toSvgY(b.y)}
-                    r={8}
-                    fill="#58a6ff"
-                    stroke="#0d1117"
-                    strokeWidth={2}
-                  />
-                  <SvgText
-                    x={toSvgX(b.x) + 12}
-                    y={toSvgY(b.y) - 8}
-                    fill="#e6edf3"
-                    fontSize={10}>
-                    {b.name}
-                  </SvgText>
-                </G>
-              ))}
-            </Svg>
-          </ScrollView>
-          <View style={styles.legendRow}>
-            <View style={[styles.legendSwatch, {backgroundColor: '#1f5430'}]} />
-            <Text style={styles.legendText}>saved point</Text>
-            <View
-              style={[
-                styles.legendDot,
-                {backgroundColor: '#d29922', marginLeft: 12},
-              ]}
-            />
-            <Text style={styles.legendText}>pending</Text>
-            <View
-              style={[
-                styles.legendDot,
-                {backgroundColor: '#58a6ff', marginLeft: 12},
-              ]}
-            />
-            <Text style={styles.legendText}>beacon</Text>
-          </View>
-          <Text style={styles.hint}>
-            Tap a saved point to delete it.
-          </Text>
+          {surveyedCells
+            .slice()
+            .sort((a, b) => (a.x - b.x) || (a.y - b.y))
+            .map(c => {
+              const heard = Object.values(c.beacons || {}).filter(
+                v => v !== null,
+              ).length;
+              const total = Object.keys(c.beacons || {}).length;
+              return (
+                <View key={`${c.x},${c.y}`} style={styles.pointRow}>
+                  <View style={{flex: 1}}>
+                    <Text style={styles.pointCoord}>
+                      ({c.x}, {c.y})
+                    </Text>
+                    <Text style={styles.pointMeta}>
+                      {heard}/{total} beacons heard
+                    </Text>
+                  </View>
+                  <TouchableOpacity
+                    style={styles.pointDelete}
+                    onPress={() => deletePoint(c)}>
+                    <Text style={styles.pointDeleteText}>delete</Text>
+                  </TouchableOpacity>
+                </View>
+              );
+            })}
         </View>
       )}
 
@@ -591,16 +474,41 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   inputDisabled: {opacity: 0.5},
-  svgScroll: {
+  pointRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
     backgroundColor: '#161b22',
     borderRadius: 8,
     borderWidth: 1,
     borderColor: '#30363d',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    marginBottom: 6,
   },
-  legendRow: {flexDirection: 'row', alignItems: 'center', marginTop: 8},
-  legendSwatch: {width: 12, height: 12, borderRadius: 2, marginRight: 4},
-  legendDot: {width: 10, height: 10, borderRadius: 5, marginRight: 4},
-  legendText: {color: '#8b949e', fontSize: 11},
+  pointCoord: {
+    color: '#e6edf3',
+    fontSize: 14,
+    fontFamily: 'monospace',
+    fontWeight: '600',
+  },
+  pointMeta: {
+    color: '#8b949e',
+    fontSize: 11,
+    marginTop: 2,
+  },
+  pointDelete: {
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 6,
+    backgroundColor: '#3a1313',
+    borderColor: '#5f2222',
+    borderWidth: 1,
+  },
+  pointDeleteText: {
+    color: '#f85149',
+    fontSize: 12,
+    fontWeight: '500',
+  },
   hint: {
     color: '#6e7681',
     fontSize: 11,
