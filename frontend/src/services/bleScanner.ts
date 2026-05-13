@@ -21,6 +21,12 @@ const RSSI_KF_Q = 4.0565;
 const RSSI_KF_R = 1.9188;
 const RSSI_KF_P0 = 1.0;
 
+interface RssiKalmanSettings {
+  q: number;
+  r: number;
+  source: 'configured' | 'default';
+}
+
 // Known beacon advertising MACs → friendly name.
 // Android only: iOS gets the name from Core Bluetooth's GATT cache.
 // To identify a beacon's advertising MAC: hold the phone touching the beacon,
@@ -41,6 +47,9 @@ export interface BeaconReading {
   lastSeen: number;
   active: boolean;
   rssiBuffer: number[];
+  kalmanQ: number;
+  kalmanR: number;
+  kalmanSource: RssiKalmanSettings['source'];
 }
 
 /**
@@ -59,6 +68,17 @@ class RssiKalmanFilter {
   private estimationError = RSSI_KF_P0;
   private initialized = false;
 
+  constructor(private q = RSSI_KF_Q, private r = RSSI_KF_R) {}
+
+  setNoise(q: number, r: number) {
+    this.q = q;
+    this.r = r;
+  }
+
+  hasNoise(q: number, r: number) {
+    return this.q === q && this.r === r;
+  }
+
   update(measurement: number): number {
     if (!this.initialized) {
       this.estimate = measurement;
@@ -67,8 +87,8 @@ class RssiKalmanFilter {
     }
 
     const predictedEstimate = this.estimate;
-    const predictedError = this.estimationError + RSSI_KF_Q;
-    const kalmanGain = predictedError / (predictedError + RSSI_KF_R);
+    const predictedError = this.estimationError + this.q;
+    const kalmanGain = predictedError / (predictedError + this.r);
 
     this.estimate =
       predictedEstimate + kalmanGain * (measurement - predictedEstimate);
@@ -89,6 +109,7 @@ class BLEScanner {
   private manager: BleManager;
   private readings: Record<string, BeaconReading> = {};
   private rssiFilters: Record<string, RssiKalmanFilter> = {};
+  private configuredKalman: Record<string, RssiKalmanSettings> = {};
   private listeners: Set<ScanCallback> = new Set();
   private scanning = false;
   private starting = false;
@@ -106,6 +127,60 @@ class BLEScanner {
     this.manager = new BleManager();
   }
 
+  setBeaconKalmanConfig(
+    config: Record<string, {q?: number; r?: number}>,
+  ): void {
+    const nextConfigured: Record<string, RssiKalmanSettings> = {};
+
+    for (const [id, beacon] of Object.entries(config)) {
+      if (
+        typeof beacon.q === 'number' &&
+        typeof beacon.r === 'number' &&
+        Number.isFinite(beacon.q) &&
+        Number.isFinite(beacon.r) &&
+        beacon.q > 0 &&
+        beacon.r > 0
+      ) {
+        nextConfigured[id] = {
+          q: beacon.q,
+          r: beacon.r,
+          source: 'configured',
+        };
+      }
+    }
+
+    this.configuredKalman = nextConfigured;
+
+    for (const id of Object.keys(this.readings)) {
+      this._applyKalmanSettings(id);
+    }
+  }
+
+  private _getKalmanSettings(id: string): RssiKalmanSettings {
+    return (
+      this.configuredKalman[id] ?? {
+        q: RSSI_KF_Q,
+        r: RSSI_KF_R,
+        source: 'default',
+      }
+    );
+  }
+
+  private _applyKalmanSettings(id: string) {
+    const settings = this._getKalmanSettings(id);
+    const reading = this.readings[id];
+    if (reading) {
+      reading.kalmanQ = settings.q;
+      reading.kalmanR = settings.r;
+      reading.kalmanSource = settings.source;
+    }
+
+    const filter = this.rssiFilters[id];
+    if (filter && !filter.hasNoise(settings.q, settings.r)) {
+      filter.setNoise(settings.q, settings.r);
+    }
+  }
+
   private _getOrCreateReading(id: string, name: string): BeaconReading {
     if (!this.readings[id]) {
       this.readings[id] = {
@@ -116,6 +191,9 @@ class BLEScanner {
         lastSeen: 0,
         active: false,
         rssiBuffer: [],
+        kalmanQ: RSSI_KF_Q,
+        kalmanR: RSSI_KF_R,
+        kalmanSource: 'default',
       };
     } else if (name && this.readings[id].name !== name) {
       this.readings[id].name = name;
@@ -322,12 +400,18 @@ class BLEScanner {
 
   private _updateBeaconReading(id: string, name: string, rssi: number) {
     const beacon = this._getOrCreateReading(id, name);
+    const settings = this._getKalmanSettings(id);
     beacon.rawRssi = rssi;
     beacon.lastSeen = Date.now();
     beacon.active = true;
+    beacon.kalmanQ = settings.q;
+    beacon.kalmanR = settings.r;
+    beacon.kalmanSource = settings.source;
 
     if (!this.rssiFilters[id]) {
-      this.rssiFilters[id] = new RssiKalmanFilter();
+      this.rssiFilters[id] = new RssiKalmanFilter(settings.q, settings.r);
+    } else if (!this.rssiFilters[id].hasNoise(settings.q, settings.r)) {
+      this.rssiFilters[id].setNoise(settings.q, settings.r);
     }
     beacon.smoothedRssi = this.rssiFilters[id].update(rssi);
 

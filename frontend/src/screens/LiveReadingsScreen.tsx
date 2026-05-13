@@ -13,11 +13,12 @@
  * ==========================================================================
  */
 
-import React, {useState, useEffect, useRef} from 'react';
+import React, {useState, useEffect, useRef, useCallback} from 'react';
 import {View, Text, TouchableOpacity, ScrollView, StyleSheet} from 'react-native';
 import {bleScanner, BeaconReading} from '../services/bleScanner';
 import {rssiToDistance} from '../services/distance';
 import {BEACONS, RSSI_D0, N} from '../config/beacons';
+import {loadBeaconConfig, SavedBeacon} from '../config/beaconConfig';
 import RssiLineChart from '../components/RssiLineChart';
 
 const MAX_HISTORY = 50;
@@ -30,21 +31,30 @@ interface RssiHistory {
 export default function LiveReadingsScreen() {
   const [readings, setReadings] = useState<Record<string, BeaconReading>>({});
   const [nearbyList, setNearbyList] = useState<BeaconReading[]>([]);
+  const [beaconConfig, setBeaconConfig] = useState<Record<string, SavedBeacon>>({});
   const [scanning, setScanning] = useState(false);
   const [showOnlyKnown, setShowOnlyKnown] = useState(false);
   const unsubRef = useRef<(() => void) | null>(null);
   const historyRef = useRef<Record<string, RssiHistory>>({});
 
+  const refreshBeaconConfig = useCallback(async () => {
+    const savedConfig = await loadBeaconConfig();
+    bleScanner.setBeaconKalmanConfig(savedConfig);
+    setBeaconConfig({...savedConfig});
+    return savedConfig;
+  }, []);
+
   useEffect(() => {
+    refreshBeaconConfig();
     return () => {
       if (unsubRef.current) {
         unsubRef.current();
         unsubRef.current = null;
       }
     };
-  }, []);
+  }, [refreshBeaconConfig]);
 
-  const toggleScanning = () => {
+  const toggleScanning = async () => {
     if (scanning) {
       if (unsubRef.current) {
         unsubRef.current();
@@ -55,6 +65,7 @@ export default function LiveReadingsScreen() {
       setNearbyList([]);
       setScanning(false);
     } else {
+      await refreshBeaconConfig();
       setScanning(true);
       unsubRef.current = bleScanner.subscribe((newReadings, nearby) => {
         for (const [id, reading] of Object.entries(newReadings)) {
@@ -119,10 +130,18 @@ export default function LiveReadingsScreen() {
       <View style={styles.beaconList}>
         {devicesToShow.map(device => {
           const beacon = readings[device.id] ?? device;
+          const savedBeacon = beaconConfig[device.id];
           const config = BEACONS[device.name];
           const active = beacon.active;
           const rawRssi = beacon.rawRssi;
           const smoothedRssi = beacon.smoothedRssi;
+          const hasSavedKalman =
+            typeof savedBeacon?.q === 'number' &&
+            typeof savedBeacon?.r === 'number';
+          const kalmanQ = beacon.kalmanQ ?? savedBeacon?.q;
+          const kalmanR = beacon.kalmanR ?? savedBeacon?.r;
+          const kalmanSource =
+            beacon.kalmanSource ?? (hasSavedKalman ? 'configured' : 'default');
 
           let distance: number | null = null;
           if (smoothedRssi !== null && smoothedRssi !== undefined) {
@@ -167,6 +186,19 @@ export default function LiveReadingsScreen() {
                     {smoothedRssi !== null && smoothedRssi !== undefined
                       ? `${smoothedRssi.toFixed(1)} dBm`
                       : '—'}
+                  </Text>
+                </View>
+
+                <View style={styles.detailRow}>
+                  <Text style={styles.detailLabel}>RSSI Kalman:</Text>
+                  <Text
+                    style={[
+                      styles.detailValueDim,
+                      kalmanSource === 'configured' && styles.detailValueGood,
+                    ]}>
+                    {kalmanQ !== undefined && kalmanR !== undefined
+                      ? `Q ${kalmanQ.toFixed(4)} · R ${kalmanR.toFixed(4)}`
+                      : 'global default'}
                   </Text>
                 </View>
 
@@ -370,6 +402,9 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#6e7681',
     fontFamily: 'monospace',
+  },
+  detailValueGood: {
+    color: '#3fb950',
   },
   chartContainer: {
     marginTop: 12,
