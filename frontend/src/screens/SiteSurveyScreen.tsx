@@ -9,15 +9,10 @@ import {
   Alert,
 } from 'react-native';
 import {useFocusEffect} from '@react-navigation/native';
-import Svg, {Rect, Circle, G, Text as SvgText} from 'react-native-svg';
+import Svg, {Rect, Circle, G, Text as SvgText, Line as SvgLine} from 'react-native-svg';
 import {bleScanner} from '../services/bleScanner';
 import {api} from '../services/api';
 import {loadBeaconConfig, SavedBeacon} from '../config/beaconConfig';
-
-interface Cell {
-  x: number;
-  y: number;
-}
 
 interface CellBeaconStats {
   n: number;
@@ -45,30 +40,15 @@ interface SurveyProgress {
   max_count?: number;
 }
 
-// Build a 1 m grid covering the integer bounding box of all configured beacons.
-function computeGrid(beacons: SavedBeacon[]): Cell[] {
-  if (beacons.length === 0) return [];
-  const xs = beacons.map(b => b.x);
-  const ys = beacons.map(b => b.y);
-  const xMin = Math.floor(Math.min(...xs));
-  const xMax = Math.ceil(Math.max(...xs));
-  const yMin = Math.floor(Math.min(...ys));
-  const yMax = Math.ceil(Math.max(...ys));
-  const out: Cell[] = [];
-  for (let gx = xMin; gx <= xMax; gx += 1) {
-    for (let gy = yMin; gy <= yMax; gy += 1) {
-      out.push({x: gx, y: gy});
-    }
-  }
-  return out;
-}
-
 export default function SiteSurveyScreen() {
   const [beacons, setBeacons] = useState<SavedBeacon[]>([]);
   const [surveyedCells, setSurveyedCells] = useState<FingerprintCell[]>([]);
   const [floorRssi, setFloorRssi] = useState<number | null>(null);
-  const [activeCell, setActiveCell] = useState<Cell | null>(null);
+
+  const [xInput, setXInput] = useState('');
+  const [yInput, setYInput] = useState('');
   const [samplesTarget, setSamplesTarget] = useState('50');
+
   const [progress, setProgress] = useState<SurveyProgress>({active: false});
   const [statusMsg, setStatusMsg] = useState('');
 
@@ -103,8 +83,7 @@ export default function SiteSurveyScreen() {
     }
   }, []);
 
-  // Keep BLE scan alive while screen is mounted. Subscribe with a no-op
-  // listener — raw advertisement events are drained on a timer.
+  // Keep BLE scan alive while screen is mounted.
   useEffect(() => {
     unsubRef.current = bleScanner.subscribe(() => {});
     return () => {
@@ -117,8 +96,7 @@ export default function SiteSurveyScreen() {
     };
   }, [stopFlush, stopPoll]);
 
-  // Reload beacon config + fingerprint state every time the tab is focused
-  // so changes made in the Beacons tab show up here without an app restart.
+  // Refresh beacons + fingerprint state each time the tab is focused.
   useFocusEffect(
     useCallback(() => {
       loadBeaconConfig().then(cfg => setBeacons(Object.values(cfg)));
@@ -126,53 +104,51 @@ export default function SiteSurveyScreen() {
     }, [refreshFingerprint]),
   );
 
-  const grid = useMemo(() => computeGrid(beacons), [beacons]);
-  const surveyedKey = useMemo(
-    () => new Set(surveyedCells.map(c => `${c.x},${c.y}`)),
-    [surveyedCells],
-  );
+  const parseCoord = (s: string): number | null => {
+    const v = parseFloat(s);
+    return Number.isFinite(v) ? v : null;
+  };
 
-  // ── SVG layout ─────────────────────────────────────────────────
-
-  const PADDING = 30;
-  const SCALE = 56;
-
-  const bbox = useMemo(() => {
-    if (beacons.length === 0) return null;
-    const xs = beacons.map(b => b.x);
-    const ys = beacons.map(b => b.y);
-    return {
-      xMin: Math.floor(Math.min(...xs)),
-      xMax: Math.ceil(Math.max(...xs)),
-      yMin: Math.floor(Math.min(...ys)),
-      yMax: Math.ceil(Math.max(...ys)),
-    };
-  }, [beacons]);
-
-  const svgW = bbox ? (bbox.xMax - bbox.xMin) * SCALE + PADDING * 2 : 240;
-  const svgH = bbox ? (bbox.yMax - bbox.yMin) * SCALE + PADDING * 2 : 240;
-  const toSvgX = (x: number) => PADDING + (x - (bbox?.xMin ?? 0)) * SCALE;
-  // Flip Y so positive y points up, matching the physical layout.
-  const toSvgY = (y: number) => svgH - PADDING - (y - (bbox?.yMin ?? 0)) * SCALE;
+  const x = parseCoord(xInput);
+  const y = parseCoord(yInput);
+  const coordsValid = x !== null && y !== null;
 
   // ── Survey lifecycle ───────────────────────────────────────────
 
   const startSurvey = async () => {
-    if (!activeCell) return;
+    if (!coordsValid) {
+      Alert.alert('Invalid coordinates', 'Enter numeric x and y values.');
+      return;
+    }
     const target = parseInt(samplesTarget, 10);
     if (!Number.isFinite(target) || target < 1) {
       Alert.alert('Invalid samples target', 'Enter a positive integer.');
       return;
     }
-    try {
-      const snap = await api.surveyStart(activeCell.x, activeCell.y, target);
-      bleScanner.drainRawEvents(); // discard pre-start buffer
-      setProgress({active: true, ...snap});
-      setStatusMsg(
-        `Surveying (${activeCell.x}, ${activeCell.y}) — stand still until full.`,
-      );
 
-      // Forward raw advertisements as they arrive.
+    // Warn if this exact point is already surveyed.
+    const existing = surveyedCells.find(c => c.x === x && c.y === y);
+    if (existing) {
+      Alert.alert(
+        `Point (${x}, ${y}) already surveyed`,
+        'Saving will overwrite the existing distribution. Continue?',
+        [
+          {text: 'Cancel', style: 'cancel'},
+          {text: 'Overwrite', style: 'destructive', onPress: () => doStart(target)},
+        ],
+      );
+      return;
+    }
+    doStart(target);
+  };
+
+  const doStart = async (target: number) => {
+    try {
+      const snap = await api.surveyStart(x as number, y as number, target);
+      bleScanner.drainRawEvents();
+      setProgress({active: true, ...snap});
+      setStatusMsg(`Collecting at (${x}, ${y}) — stand still.`);
+
       flushIntervalRef.current = setInterval(async () => {
         const events = bleScanner.drainRawEvents();
         if (events.length === 0) return;
@@ -180,12 +156,9 @@ export default function SiteSurveyScreen() {
           await api.surveyEvents(
             events.map(e => ({beacon_id: e.beacon_id, rssi: e.rssi})),
           );
-        } catch {
-          // Network blips are non-fatal; next poll will reflect server state.
-        }
+        } catch {}
       }, 400);
 
-      // Poll backend progress (authoritative count of buffered samples).
       pollIntervalRef.current = setInterval(async () => {
         try {
           const p = await api.surveyProgress();
@@ -193,22 +166,23 @@ export default function SiteSurveyScreen() {
         } catch {}
       }, 500);
     } catch (e: any) {
-      Alert.alert('Failed to start survey', e?.message ?? String(e));
+      Alert.alert('Failed to start', e?.message ?? String(e));
     }
   };
 
-  const finalize = async () => {
+  const savePoint = async () => {
     stopFlush();
     stopPoll();
     try {
       const expected = beacons.map(b => b.id);
       await api.surveyFinalize(expected);
-      setStatusMsg(`Cell (${activeCell?.x}, ${activeCell?.y}) saved.`);
-      setActiveCell(null);
+      setStatusMsg(`Saved (${x}, ${y}).`);
       setProgress({active: false});
       await refreshFingerprint();
+      // Keep the x/y inputs as-is so the user can quickly edit just one
+      // axis for the next nearby point.
     } catch (e: any) {
-      Alert.alert('Finalize failed', e?.message ?? String(e));
+      Alert.alert('Save failed', e?.message ?? String(e));
     }
   };
 
@@ -219,37 +193,13 @@ export default function SiteSurveyScreen() {
       await api.surveyCancel();
     } catch {}
     setProgress({active: false});
-    setStatusMsg('Survey cancelled.');
+    setStatusMsg('Cancelled.');
   };
 
-  const clearAll = () => {
+  const deletePoint = (cell: FingerprintCell) => {
     Alert.alert(
-      'Clear fingerprint?',
-      'Removes ALL surveyed cells. Cannot be undone.',
-      [
-        {text: 'Cancel', style: 'cancel'},
-        {
-          text: 'Clear',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await api.fingerprintClear();
-              await refreshFingerprint();
-              setActiveCell(null);
-              setStatusMsg('Fingerprint cleared.');
-            } catch (e: any) {
-              Alert.alert('Clear failed', e?.message ?? String(e));
-            }
-          },
-        },
-      ],
-    );
-  };
-
-  const deleteCell = (cell: Cell) => {
-    Alert.alert(
-      `Delete cell (${cell.x}, ${cell.y})?`,
-      'This removes its RSSI distribution from the fingerprint.',
+      `Delete (${cell.x}, ${cell.y})?`,
+      'Removes this point\'s distribution from the fingerprint.',
       [
         {text: 'Cancel', style: 'cancel'},
         {
@@ -268,42 +218,75 @@ export default function SiteSurveyScreen() {
     );
   };
 
-  // ── UI bits ───────────────────────────────────────────────────
-
-  const cellOnPress = (cell: Cell) => {
-    if (progress.active) return; // can't switch cells mid-survey
-    if (surveyedKey.has(`${cell.x},${cell.y}`)) {
-      // Already surveyed — offer to delete and resurvey
-      Alert.alert(
-        `Cell (${cell.x}, ${cell.y}) already surveyed`,
-        'Select an action:',
-        [
-          {text: 'Cancel', style: 'cancel'},
-          {text: 'Delete', style: 'destructive', onPress: () => deleteCell(cell)},
-          {
-            text: 'Resurvey',
-            onPress: () => {
-              setActiveCell(cell);
-            },
+  const clearAll = () => {
+    Alert.alert(
+      'Clear fingerprint?',
+      'Removes ALL surveyed points. Cannot be undone.',
+      [
+        {text: 'Cancel', style: 'cancel'},
+        {
+          text: 'Clear',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await api.fingerprintClear();
+              await refreshFingerprint();
+              setStatusMsg('Fingerprint cleared.');
+            } catch (e: any) {
+              Alert.alert('Clear failed', e?.message ?? String(e));
+            }
           },
-        ],
-      );
-      return;
-    }
-    setActiveCell(cell);
+        },
+      ],
+    );
   };
 
-  const target = progress.samples_target ?? parseInt(samplesTarget, 10) ?? 50;
-  const minCount = progress.min_count ?? 0;
-  const allFull = minCount >= target;
+  // ── SVG layout ─────────────────────────────────────────────────
+
+  const PADDING = 30;
+  const SCALE = 50;
+
+  const bbox = useMemo(() => {
+    const points: {x: number; y: number}[] = [...beacons];
+    surveyedCells.forEach(c => points.push({x: c.x, y: c.y}));
+    if (coordsValid) points.push({x: x as number, y: y as number});
+    if (points.length === 0) return null;
+    const xs = points.map(p => p.x);
+    const ys = points.map(p => p.y);
+    // Add 1 m of margin so corner points aren't flush with the edge.
+    return {
+      xMin: Math.floor(Math.min(...xs)) - 1,
+      xMax: Math.ceil(Math.max(...xs)) + 1,
+      yMin: Math.floor(Math.min(...ys)) - 1,
+      yMax: Math.ceil(Math.max(...ys)) + 1,
+    };
+  }, [beacons, surveyedCells, x, y, coordsValid]);
+
+  const svgW = bbox ? (bbox.xMax - bbox.xMin) * SCALE + PADDING * 2 : 240;
+  const svgH = bbox ? (bbox.yMax - bbox.yMin) * SCALE + PADDING * 2 : 240;
+  const toSvgX = (px: number) => PADDING + (px - (bbox?.xMin ?? 0)) * SCALE;
+  const toSvgY = (py: number) =>
+    svgH - PADDING - (py - (bbox?.yMin ?? 0)) * SCALE;
+
+  // Generate integer 1 m gridlines for the visual reference.
+  const gridLines = useMemo(() => {
+    if (!bbox) return {vertical: [], horizontal: []};
+    const vertical: number[] = [];
+    const horizontal: number[] = [];
+    for (let gx = bbox.xMin; gx <= bbox.xMax; gx += 1) vertical.push(gx);
+    for (let gy = bbox.yMin; gy <= bbox.yMax; gy += 1) horizontal.push(gy);
+    return {vertical, horizontal};
+  }, [bbox]);
+
+  // ── Render ────────────────────────────────────────────────────
 
   return (
     <ScrollView style={styles.container}>
       <Text style={styles.title}>Site Survey</Text>
       <Text style={styles.subtitle}>
-        Stand at each grid point and capture the RSSI distribution from every
-        beacon. The fingerprint replaces trilateration in the position
-        estimator.
+        Type the (x, y) coordinate where you&apos;re standing, collect the
+        RSSI distribution, and save the point. Repeat for every location
+        you want in the fingerprint.
       </Text>
 
       {beacons.length === 0 ? (
@@ -314,8 +297,42 @@ export default function SiteSurveyScreen() {
         </View>
       ) : null}
 
+      {/* Coordinate input */}
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Samples per beacon per cell</Text>
+        <Text style={styles.sectionTitle}>Point coordinates</Text>
+        <View style={styles.coordsRow}>
+          <View style={{flex: 1}}>
+            <Text style={styles.fieldLabel}>x (meters)</Text>
+            <TextInput
+              style={[styles.input, progress.active && styles.inputDisabled]}
+              value={xInput}
+              onChangeText={setXInput}
+              keyboardType="default"
+              placeholder="0.0"
+              placeholderTextColor="#6e7681"
+              editable={!progress.active}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+          </View>
+          <View style={{width: 12}} />
+          <View style={{flex: 1}}>
+            <Text style={styles.fieldLabel}>y (meters)</Text>
+            <TextInput
+              style={[styles.input, progress.active && styles.inputDisabled]}
+              value={yInput}
+              onChangeText={setYInput}
+              keyboardType="default"
+              placeholder="0.0"
+              placeholderTextColor="#6e7681"
+              editable={!progress.active}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+          </View>
+        </View>
+
+        <Text style={styles.fieldLabel}>Samples per beacon</Text>
         <TextInput
           style={[styles.input, progress.active && styles.inputDisabled]}
           value={samplesTarget}
@@ -325,38 +342,126 @@ export default function SiteSurveyScreen() {
           placeholderTextColor="#6e7681"
           editable={!progress.active}
         />
+
+        {!progress.active ? (
+          <TouchableOpacity
+            style={[
+              styles.primaryButton,
+              (!coordsValid || beacons.length === 0) && styles.buttonDisabled,
+            ]}
+            onPress={startSurvey}
+            disabled={!coordsValid || beacons.length === 0}>
+            <Text style={styles.primaryButtonText}>Start collecting</Text>
+          </TouchableOpacity>
+        ) : (
+          <View>
+            <Text style={styles.statusText}>{statusMsg}</Text>
+            {beacons.map(b => {
+              const seen = progress.per_beacon?.[b.id]?.count ?? 0;
+              const t = progress.samples_target ?? 50;
+              const pct = Math.min(
+                100,
+                Math.round((seen / Math.max(t, 1)) * 100),
+              );
+              return (
+                <View key={b.id} style={styles.barRow}>
+                  <Text style={styles.barLabel} numberOfLines={1}>
+                    {b.name}
+                  </Text>
+                  <View style={styles.barTrack}>
+                    <View style={[styles.barFill, {width: `${pct}%`}]} />
+                  </View>
+                  <Text style={styles.barCount}>
+                    {seen}/{t}
+                  </Text>
+                </View>
+              );
+            })}
+            <View style={styles.buttonRow}>
+              <TouchableOpacity style={styles.cancelButton} onPress={cancel}>
+                <Text style={styles.cancelButtonText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.saveButton} onPress={savePoint}>
+                <Text style={styles.saveButtonText}>Save point</Text>
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.hint}>
+              You can save early — beacons below target keep what they have;
+              silent beacons get stored as &quot;not detected&quot;.
+            </Text>
+          </View>
+        )}
       </View>
 
+      {/* Map visualization */}
       {bbox && (
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>
-            Grid · {surveyedCells.length}/{grid.length} cells surveyed
+            Map · {surveyedCells.length} point{surveyedCells.length === 1 ? '' : 's'} surveyed
           </Text>
           <ScrollView horizontal style={styles.svgScroll}>
             <Svg width={svgW} height={svgH}>
-              {grid.map(c => {
-                const key = `${c.x},${c.y}`;
-                const isSurveyed = surveyedKey.has(key);
-                const isActive =
-                  activeCell && activeCell.x === c.x && activeCell.y === c.y;
-                const half = 16;
-                let fill = '#21262d';
-                if (isSurveyed) fill = '#1f5430';
-                if (isActive) fill = '#9e6a03';
-                return (
+              {/* Reference 1 m gridlines */}
+              {gridLines.vertical.map(gx => (
+                <SvgLine
+                  key={`v${gx}`}
+                  x1={toSvgX(gx)}
+                  y1={PADDING / 2}
+                  x2={toSvgX(gx)}
+                  y2={svgH - PADDING / 2}
+                  stroke="#21262d"
+                  strokeWidth={1}
+                />
+              ))}
+              {gridLines.horizontal.map(gy => (
+                <SvgLine
+                  key={`h${gy}`}
+                  x1={PADDING / 2}
+                  y1={toSvgY(gy)}
+                  x2={svgW - PADDING / 2}
+                  y2={toSvgY(gy)}
+                  stroke="#21262d"
+                  strokeWidth={1}
+                />
+              ))}
+
+              {/* Surveyed points */}
+              {surveyedCells.map(c => (
+                <G key={`c${c.x},${c.y}`}>
                   <Rect
-                    key={key}
-                    x={toSvgX(c.x) - half}
-                    y={toSvgY(c.y) - half}
-                    width={half * 2}
-                    height={half * 2}
-                    fill={fill}
-                    stroke={isActive ? '#d29922' : '#30363d'}
-                    strokeWidth={isActive ? 2 : 1}
-                    onPress={() => cellOnPress(c)}
+                    x={toSvgX(c.x) - 10}
+                    y={toSvgY(c.y) - 10}
+                    width={20}
+                    height={20}
+                    fill="#1f5430"
+                    stroke="#3fb950"
+                    strokeWidth={1}
+                    onPress={() => deletePoint(c)}
                   />
-                );
-              })}
+                  <SvgText
+                    x={toSvgX(c.x)}
+                    y={toSvgY(c.y) + 22}
+                    fill="#8b949e"
+                    fontSize={9}
+                    textAnchor="middle">
+                    ({c.x},{c.y})
+                  </SvgText>
+                </G>
+              ))}
+
+              {/* Pending point (from typed input) */}
+              {coordsValid && (
+                <Circle
+                  cx={toSvgX(x as number)}
+                  cy={toSvgY(y as number)}
+                  r={9}
+                  fill="#d2992233"
+                  stroke="#d29922"
+                  strokeWidth={2}
+                />
+              )}
+
+              {/* Beacon anchors */}
               {beacons.map(b => (
                 <G key={b.id}>
                   <Circle
@@ -379,22 +484,15 @@ export default function SiteSurveyScreen() {
             </Svg>
           </ScrollView>
           <View style={styles.legendRow}>
-            <View style={[styles.legendSwatch, {backgroundColor: '#21262d'}]} />
-            <Text style={styles.legendText}>unsurveyed</Text>
+            <View style={[styles.legendSwatch, {backgroundColor: '#1f5430'}]} />
+            <Text style={styles.legendText}>saved point</Text>
             <View
               style={[
-                styles.legendSwatch,
-                {backgroundColor: '#9e6a03', marginLeft: 12},
+                styles.legendDot,
+                {backgroundColor: '#d29922', marginLeft: 12},
               ]}
             />
-            <Text style={styles.legendText}>active</Text>
-            <View
-              style={[
-                styles.legendSwatch,
-                {backgroundColor: '#1f5430', marginLeft: 12},
-              ]}
-            />
-            <Text style={styles.legendText}>surveyed</Text>
+            <Text style={styles.legendText}>pending</Text>
             <View
               style={[
                 styles.legendDot,
@@ -404,88 +502,16 @@ export default function SiteSurveyScreen() {
             <Text style={styles.legendText}>beacon</Text>
           </View>
           <Text style={styles.hint}>
-            Tap any cell to select it. Tap a surveyed cell to delete or
-            resurvey it.
+            Tap a saved point to delete it.
           </Text>
         </View>
       )}
 
-      {activeCell && (
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>
-            Cell ({activeCell.x}, {activeCell.y})
-          </Text>
-
-          {!progress.active ? (
-            <TouchableOpacity
-              style={[
-                styles.primaryButton,
-                beacons.length === 0 && styles.buttonDisabled,
-              ]}
-              onPress={startSurvey}
-              disabled={beacons.length === 0}>
-              <Text style={styles.primaryButtonText}>
-                Start collecting · {samplesTarget} samples / beacon
-              </Text>
-            </TouchableOpacity>
-          ) : (
-            <View>
-              <Text style={styles.statusText}>{statusMsg}</Text>
-
-              {/* Per-beacon progress bars. Beacons that have not been heard
-                  yet at this cell show count = 0 so the user can tell which
-                  ones are silent in real time. */}
-              {beacons.map(b => {
-                const seen = progress.per_beacon?.[b.id]?.count ?? 0;
-                const t = progress.samples_target ?? target;
-                const pct = Math.min(100, Math.round((seen / Math.max(t, 1)) * 100));
-                return (
-                  <View key={b.id} style={styles.barRow}>
-                    <Text style={styles.barLabel} numberOfLines={1}>
-                      {b.name}
-                    </Text>
-                    <View style={styles.barTrack}>
-                      <View style={[styles.barFill, {width: `${pct}%`}]} />
-                    </View>
-                    <Text style={styles.barCount}>
-                      {seen}/{t}
-                    </Text>
-                  </View>
-                );
-              })}
-
-              <View style={styles.buttonRow}>
-                <TouchableOpacity style={styles.cancelButton} onPress={cancel}>
-                  <Text style={styles.cancelButtonText}>Cancel</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[
-                    styles.finalizeButton,
-                    !allFull && styles.finalizeEarlyButton,
-                  ]}
-                  onPress={finalize}>
-                  <Text style={styles.finalizeButtonText}>
-                    {allFull ? 'Finalize' : 'Finalize early'}
-                  </Text>
-                </TouchableOpacity>
-              </View>
-              {!allFull && (
-                <Text style={styles.hint}>
-                  Beacons below target will still be saved with the samples
-                  collected so far. Beacons with zero readings will be stored
-                  as &quot;not detected&quot; and resolved to the floor RSSI
-                  at match time.
-                </Text>
-              )}
-            </View>
-          )}
-        </View>
-      )}
-
+      {/* Summary */}
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Fingerprint summary</Text>
         <Text style={styles.statText}>
-          Cells surveyed: {surveyedCells.length}/{grid.length}
+          Points surveyed: {surveyedCells.length}
         </Text>
         <Text style={styles.statText}>
           Beacons in fingerprint:{' '}
@@ -547,6 +573,13 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   warningText: {color: '#d29922', fontSize: 13},
+  coordsRow: {flexDirection: 'row', marginBottom: 8},
+  fieldLabel: {
+    fontSize: 11,
+    color: '#8b949e',
+    marginBottom: 4,
+    fontWeight: '500',
+  },
   input: {
     backgroundColor: '#161b22',
     borderRadius: 8,
@@ -555,6 +588,7 @@ const styles = StyleSheet.create({
     color: '#e6edf3',
     padding: 10,
     fontFamily: 'monospace',
+    marginBottom: 8,
   },
   inputDisabled: {opacity: 0.5},
   svgScroll: {
@@ -579,6 +613,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     padding: 14,
     alignItems: 'center',
+    marginTop: 4,
   },
   primaryButtonText: {color: '#fff', fontWeight: '600'},
   buttonDisabled: {opacity: 0.4},
@@ -617,15 +652,14 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   cancelButtonText: {color: '#e6edf3', fontWeight: '600'},
-  finalizeButton: {
+  saveButton: {
     flex: 1,
     backgroundColor: '#1f6feb',
     borderRadius: 8,
     padding: 12,
     alignItems: 'center',
   },
-  finalizeEarlyButton: {backgroundColor: '#9e6a03'},
-  finalizeButtonText: {color: '#fff', fontWeight: '600'},
+  saveButtonText: {color: '#fff', fontWeight: '600'},
   statText: {
     color: '#e6edf3',
     fontSize: 13,
