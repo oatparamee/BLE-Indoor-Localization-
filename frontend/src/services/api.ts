@@ -65,8 +65,35 @@ export interface RssiEvent {
   rssi: number;
 }
 
+export interface PersistedBeacon {
+  id: string;
+  name: string;
+  x: number;
+  y: number;
+  q?: number;
+  r?: number;
+}
+
 export const api = {
   health: () => get('/health'),
+
+  // ── Beacons (persistent registry on the backend) ──────────────────
+
+  /** Fetch all configured beacons as {beacon_id: PersistedBeacon}. */
+  beaconsList: () =>
+    get('/beacons') as Promise<{beacons: Record<string, PersistedBeacon>}>,
+
+  /** Add or update one beacon. Persisted to backend/data/beacons.json. */
+  beaconsUpsert: (b: PersistedBeacon) => post('/beacons', b),
+
+  /** Remove one beacon by id. */
+  beaconsDelete: (id: string) =>
+    fetch(`${getApiUrl()}/beacons/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }).then(parseJsonResponse),
+
+  /** Wipe the entire beacon registry. */
+  beaconsClear: () => post('/beacons/clear', {}),
 
   calibrateSample: (rssi: number, distance: number) =>
     post('/calibrate/sample', {rssi, distance}),

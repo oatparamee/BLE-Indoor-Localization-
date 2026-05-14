@@ -37,6 +37,7 @@ from flask_cors import CORS
 from config import BEACONS, RSSI_D0, N
 from calibration import CalibrationStore
 from debug_log import debug_log
+from beacons import BeaconStore
 from fingerprint import FingerprintStore
 from fingerprint_match import match as fingerprint_match
 from fingerprint_pipeline import FingerprintPipeline
@@ -104,6 +105,7 @@ pipeline = PositioningPipeline(
 # Fingerprint survey infrastructure — independent of the live pipeline.
 # Survey samples are stored raw (no 1D KF) so the recorded variance
 # reflects true sensor noise. See backend/fingerprint.py and survey.py.
+beacon_store = BeaconStore()
 fingerprint_store = FingerprintStore()
 survey_collector = SurveyCollector()
 
@@ -118,6 +120,63 @@ fp_pipeline = FingerprintPipeline(store=fingerprint_store)
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"status": "ok", "beacons": list(BEACONS.keys())})
+
+
+# ---------- Beacons (persistent registry on disk) ----------
+
+@app.route("/beacons", methods=["GET"])
+def beacons_list():
+    """Return all configured beacons as {beacon_id: {id, name, x, y, q?, r?}}."""
+    return jsonify({"beacons": beacon_store.as_dict()})
+
+
+@app.route("/beacons", methods=["POST"])
+def beacons_upsert():
+    """Add or update one beacon.
+
+    Body:
+        {"id": "AA:BB:CC:...", "name": "BCPro_0", "x": 0, "y": 0,
+         "q": 0.7143, "r": 1.29}     // q and r are optional
+
+    Returns the saved entry.
+    """
+    data = request.get_json(force=True) or {}
+    bid = data.get("id")
+    name = data.get("name") or bid
+    try:
+        x = float(data["x"])
+        y = float(data["y"])
+    except (KeyError, TypeError, ValueError):
+        return jsonify({"error": "x and y are required numbers"}), 400
+    if not bid:
+        return jsonify({"error": "id is required"}), 400
+
+    q = data.get("q")
+    r = data.get("r")
+    try:
+        q_val = float(q) if q is not None else None
+        r_val = float(r) if r is not None else None
+    except (TypeError, ValueError):
+        return jsonify({"error": "q and r must be numeric or null"}), 400
+
+    entry = beacon_store.upsert(str(bid), str(name), x, y, q=q_val, r=r_val)
+    beacon_store.save()
+    return jsonify({"status": "saved", "beacon": entry})
+
+
+@app.route("/beacons/<path:beacon_id>", methods=["DELETE"])
+def beacons_delete(beacon_id):
+    removed = beacon_store.delete(beacon_id)
+    if removed:
+        beacon_store.save()
+    return jsonify({"removed": removed})
+
+
+@app.route("/beacons/clear", methods=["POST"])
+def beacons_clear():
+    beacon_store.clear()
+    beacon_store.save()
+    return jsonify({"status": "beacons cleared"})
 
 
 # ---------- Calibration ----------
