@@ -59,6 +59,7 @@ export interface BeaconReading {
  */
 export interface RawRssiEvent {
   beacon_id: string;
+  beacon_name: string;
   rssi: number;
   timestamp: number;
 }
@@ -420,7 +421,12 @@ class BLEScanner {
       beacon.rssiBuffer.shift();
     }
 
-    this.rawEventBuffer.push({beacon_id: id, rssi, timestamp: Date.now()});
+    this.rawEventBuffer.push({
+      beacon_id: id,
+      beacon_name: name,
+      rssi,
+      timestamp: Date.now(),
+    });
     if (this.rawEventBuffer.length > BLEScanner.RAW_BUFFER_MAX) {
       this.rawEventBuffer.splice(
         0,

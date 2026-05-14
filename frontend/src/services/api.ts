@@ -38,6 +38,14 @@ async function get(path: string) {
   return parseJsonResponse(res);
 }
 
+function withSession(path: string, sessionId?: string) {
+  if (!sessionId) {
+    return path;
+  }
+  const separator = path.includes('?') ? '&' : '?';
+  return `${path}${separator}session_id=${encodeURIComponent(sessionId)}`;
+}
+
 export interface PositionBeaconInput {
   /** UUID / device.id of the selected BLE beacon. */
   id: string;
@@ -62,6 +70,7 @@ export interface PipelineBeaconSetup {
 
 export interface RssiEvent {
   beacon_id: string;
+  beacon_name?: string;
   rssi: number;
 }
 
@@ -165,24 +174,31 @@ export const api = {
 
   // ── Site survey (fingerprint grid collection) ────────────────────
 
-  /** Begin collecting raw RSSI for one grid cell. Replaces any in-progress session. */
-  surveyStart: (x: number, y: number, samples_target: number) =>
-    post('/survey/start', {x, y, samples_target}),
+  /** Begin collecting raw RSSI for one grid cell for this phone/session. */
+  surveyStart: (
+    x: number,
+    y: number,
+    samples_target: number,
+    session_id?: string,
+  ) => post('/survey/start', {x, y, samples_target, session_id}),
 
-  /** Append raw RSSI events to the active survey cell. */
-  surveyEvents: (events: RssiEvent[]) =>
-    post('/survey/events', {events}),
+  /** Append raw RSSI events to this phone/session's active survey cell. */
+  surveyEvents: (events: RssiEvent[], session_id?: string) =>
+    post('/survey/events', {events, session_id}),
 
-  /** Per-beacon sample counts vs target for the active session. */
-  surveyProgress: () => get('/survey/progress'),
+  /** Per-beacon sample counts vs target for this phone/session. */
+  surveyProgress: (session_id?: string) => get(withSession('/survey/progress', session_id)),
 
   /** Save the active cell to the fingerprint store and end the session.
    *  Pass expected_beacons so beacons that were silent get stored as null. */
-  surveyFinalize: (expected_beacons?: string[]) =>
-    post('/survey/finalize', expected_beacons ? {expected_beacons} : {}),
+  surveyFinalize: (expected_beacons?: string[], session_id?: string) =>
+    post(
+      '/survey/finalize',
+      expected_beacons ? {expected_beacons, session_id} : {session_id},
+    ),
 
-  /** Discard the active survey session without saving. */
-  surveyCancel: () => post('/survey/cancel', {}),
+  /** Discard this phone/session's active survey session without saving. */
+  surveyCancel: (session_id?: string) => post('/survey/cancel', {session_id}),
 
   // ── Fingerprint store / matcher ──────────────────────────────────
 

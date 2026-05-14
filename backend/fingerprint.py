@@ -53,6 +53,21 @@ def _cell_stats(samples: list) -> dict:
     }
 
 
+def _entry_samples(entry) -> list:
+    if not isinstance(entry, dict):
+        return []
+    samples = entry.get("samples")
+    if not isinstance(samples, list):
+        return []
+    out = []
+    for sample in samples:
+        try:
+            out.append(float(sample))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
 class FingerprintStore:
     def __init__(self, path: Optional[str] = None, grid_step_m: float = 1.0):
         self.path = path or DEFAULT_PATH
@@ -99,25 +114,49 @@ class FingerprintStore:
         per_beacon_samples: dict,
         timestamp: Optional[float] = None,
     ) -> dict:
-        """Build or replace a cell from {beacon_id: [rssi, ...]}.
+        """Build or merge a cell from {beacon_id: [rssi, ...]}.
 
         Beacons absent or with an empty sample list are stored as None
-        and resolved to the floor RSSI at match time.
+        and resolved to the floor RSSI at match time. If the same point is
+        saved more than once, new samples are appended to the existing cell
+        instead of replacing another phone's upload.
         """
         ts = float(timestamp if timestamp is not None else time.time())
-        cell = {
-            "x": float(x),
-            "y": float(y),
-            "timestamp": ts,
-            "beacons": {},
-        }
-        for bid, samples in per_beacon_samples.items():
-            if not samples:
-                cell["beacons"][str(bid)] = None
-                continue
-            cell["beacons"][str(bid)] = _cell_stats([float(s) for s in samples])
+        key = _cell_key(x, y)
         with self._lock:
-            self._cells[_cell_key(x, y)] = cell
+            existing = self._cells.get(key)
+            existing_beacons = (
+                existing.get("beacons", {}) if isinstance(existing, dict) else {}
+            )
+            beacon_ids = set(existing_beacons.keys()) | {
+                str(bid) for bid in per_beacon_samples.keys()
+            }
+
+            cell = {
+                "x": float(x),
+                "y": float(y),
+                "timestamp": ts,
+                "beacons": {},
+            }
+            for bid in beacon_ids:
+                existing_samples = _entry_samples(existing_beacons.get(str(bid)))
+                raw_new_samples = per_beacon_samples.get(
+                    bid,
+                    per_beacon_samples.get(str(bid), []),
+                )
+                new_samples = []
+                for sample in raw_new_samples or []:
+                    try:
+                        new_samples.append(float(sample))
+                    except (TypeError, ValueError):
+                        continue
+                samples = existing_samples + new_samples
+                if not samples:
+                    cell["beacons"][str(bid)] = None
+                    continue
+                cell["beacons"][str(bid)] = _cell_stats(samples)
+
+            self._cells[key] = cell
             self._floor_cache = None
         return cell
 

@@ -1,21 +1,22 @@
 """
-Survey collector — buffers raw RSSI events for ONE active (x, y) cell
-while the user stands at that grid point.
+Survey collector — buffers raw RSSI events for active (x, y) cells while
+users stand at grid points.
 
-Only one cell can be surveyed at a time. The collector is independent
-from the live PositioningPipeline: survey samples are stored raw (no
-1D Kalman smoothing) so the resulting fingerprint variance reflects
-the true sensor noise.
+Multiple clients may survey at the same time. Each phone supplies a stable
+session_id, so one user's /survey/start cannot replace another user's active
+buffer. The collector is independent from the live PositioningPipeline:
+survey samples are stored raw (no 1D Kalman smoothing) so the resulting
+fingerprint variance reflects the true sensor noise.
 
 Flow:
-    POST /survey/start  -> session(x, y, samples_target)
-    POST /survey/events -> append samples to per-beacon buckets
+    POST /survey/start  -> session(session_id, x, y, samples_target)
+    POST /survey/events -> append samples to that session's per-beacon buckets
                            (bucket capped at samples_target so an
                             over-eager BLE scanner can't bloat memory)
-    GET  /survey/progress -> per-beacon counts vs target
-    POST /survey/finalize -> hand the raw buffer to FingerprintStore
+    GET  /survey/progress -> per-beacon counts vs target for that session
+    POST /survey/finalize -> hand that raw buffer to FingerprintStore
                              and clear the active session
-    POST /survey/cancel   -> drop the active session, keep nothing
+    POST /survey/cancel   -> drop that active session, keep nothing
 """
 
 import threading
@@ -24,7 +25,8 @@ from typing import Optional
 
 
 class SurveySession:
-    def __init__(self, x: float, y: float, samples_target: int):
+    def __init__(self, session_id: str, x: float, y: float, samples_target: int):
+        self.session_id = str(session_id)
         self.x = float(x)
         self.y = float(y)
         self.samples_target = max(1, int(samples_target))
@@ -35,24 +37,29 @@ class SurveySession:
 class SurveyCollector:
     def __init__(self):
         self._lock = threading.Lock()
-        self._session: Optional[SurveySession] = None
+        self._sessions: dict[str, SurveySession] = {}
 
-    def start(self, x: float, y: float, samples_target: int) -> dict:
+    def start(
+        self,
+        x: float,
+        y: float,
+        samples_target: int,
+        session_id: str = "default",
+    ) -> dict:
         with self._lock:
-            self._session = SurveySession(x, y, samples_target)
-            return self._snapshot_locked()
+            sid = str(session_id or "default")
+            self._sessions[sid] = SurveySession(sid, x, y, samples_target)
+            return self._snapshot_locked(self._sessions[sid])
 
-    def cancel(self) -> bool:
+    def cancel(self, session_id: str = "default") -> bool:
         with self._lock:
-            was_active = self._session is not None
-            self._session = None
-            return was_active
+            return self._sessions.pop(str(session_id or "default"), None) is not None
 
-    def is_active(self) -> bool:
+    def is_active(self, session_id: str = "default") -> bool:
         with self._lock:
-            return self._session is not None
+            return str(session_id or "default") in self._sessions
 
-    def ingest_events(self, events: list) -> int:
+    def ingest_events(self, events: list, session_id: str = "default") -> int:
         """Append events to the active cell's buffer.
 
         Returns the number of events that landed in a bucket. Events
@@ -62,7 +69,7 @@ class SurveyCollector:
         if not events:
             return 0
         with self._lock:
-            s = self._session
+            s = self._sessions.get(str(session_id or "default"))
             if s is None:
                 return 0
             applied = 0
@@ -84,33 +91,35 @@ class SurveyCollector:
                     applied += 1
             return applied
 
-    def progress(self) -> Optional[dict]:
+    def progress(self, session_id: str = "default") -> Optional[dict]:
         with self._lock:
-            if self._session is None:
+            s = self._sessions.get(str(session_id or "default"))
+            if s is None:
                 return None
-            return self._snapshot_locked()
+            return self._snapshot_locked(s)
 
-    def take_buffer(self) -> Optional[dict]:
+    def take_buffer(self, session_id: str = "default") -> Optional[dict]:
         """Return the raw per-beacon buffer and clear the session.
         None if no active session."""
         with self._lock:
-            s = self._session
+            sid = str(session_id or "default")
+            s = self._sessions.get(sid)
             if s is None:
                 return None
             data = {
+                "session_id": s.session_id,
                 "x": s.x,
                 "y": s.y,
                 "samples_target": s.samples_target,
                 "started_at": s.started_at,
                 "per_beacon_samples": s.buffer,
             }
-            self._session = None
+            del self._sessions[sid]
             return data
 
     # ── Internals ──────────────────────────────────────────────────
 
-    def _snapshot_locked(self) -> dict:
-        s = self._session
+    def _snapshot_locked(self, s: SurveySession) -> dict:
         per_beacon = {
             bid: {"count": len(samples), "target": s.samples_target}
             for bid, samples in s.buffer.items()
@@ -118,6 +127,7 @@ class SurveyCollector:
         max_count = max((v["count"] for v in per_beacon.values()), default=0)
         min_count = min((v["count"] for v in per_beacon.values()), default=0)
         return {
+            "session_id": s.session_id,
             "x": s.x,
             "y": s.y,
             "samples_target": s.samples_target,

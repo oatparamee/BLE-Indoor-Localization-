@@ -54,6 +54,9 @@ export default function SiteSurveyScreen() {
   const flushIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const unsubRef = useRef<(() => void) | null>(null);
+  const surveySessionIdRef = useRef(
+    `survey-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  );
 
   const stopFlush = useCallback(() => {
     if (flushIntervalRef.current) {
@@ -130,10 +133,10 @@ export default function SiteSurveyScreen() {
     if (existing) {
       Alert.alert(
         `Point (${x}, ${y}) already surveyed`,
-        'Saving will overwrite the existing distribution. Continue?',
+        'Saving will merge new samples into the existing distribution. Continue?',
         [
           {text: 'Cancel', style: 'cancel'},
-          {text: 'Overwrite', style: 'destructive', onPress: () => doStart(target)},
+          {text: 'Merge', onPress: () => doStart(target)},
         ],
       );
       return;
@@ -143,7 +146,9 @@ export default function SiteSurveyScreen() {
 
   const doStart = async (target: number) => {
     try {
-      const snap = await api.surveyStart(x as number, y as number, target);
+      const sessionId = surveySessionIdRef.current;
+      const beaconIdByName = new Map(beacons.map(b => [b.name, b.id]));
+      const snap = await api.surveyStart(x as number, y as number, target, sessionId);
       bleScanner.drainRawEvents();
       setProgress({active: true, ...snap});
       setStatusMsg(`Collecting at (${x}, ${y}) — stand still.`);
@@ -153,14 +158,19 @@ export default function SiteSurveyScreen() {
         if (events.length === 0) return;
         try {
           await api.surveyEvents(
-            events.map(e => ({beacon_id: e.beacon_id, rssi: e.rssi})),
+            events.map(e => ({
+              beacon_id: beaconIdByName.get(e.beacon_name) ?? e.beacon_id,
+              beacon_name: e.beacon_name,
+              rssi: e.rssi,
+            })),
+            sessionId,
           );
         } catch {}
       }, 400);
 
       pollIntervalRef.current = setInterval(async () => {
         try {
-          const p = await api.surveyProgress();
+          const p = await api.surveyProgress(sessionId);
           setProgress(p);
         } catch {}
       }, 500);
@@ -174,7 +184,7 @@ export default function SiteSurveyScreen() {
     stopPoll();
     try {
       const expected = beacons.map(b => b.id);
-      await api.surveyFinalize(expected);
+      await api.surveyFinalize(expected, surveySessionIdRef.current);
       setStatusMsg(`Saved (${x}, ${y}).`);
       setProgress({active: false});
       await refreshFingerprint();
@@ -189,7 +199,7 @@ export default function SiteSurveyScreen() {
     stopFlush();
     stopPoll();
     try {
-      await api.surveyCancel();
+      await api.surveyCancel(surveySessionIdRef.current);
     } catch {}
     setProgress({active: false});
     setStatusMsg('Cancelled.');

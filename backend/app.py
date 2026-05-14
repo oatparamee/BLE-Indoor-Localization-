@@ -530,16 +530,24 @@ def pipeline_kalman_update():
 
 # ---------- Fingerprint survey (grid-based site survey) ----------
 
+def _survey_session_id(data=None):
+    if data and data.get("session_id"):
+        return str(data.get("session_id"))
+    return str(request.args.get("session_id") or "default")
+
+
 @app.route("/survey/start", methods=["POST"])
 def survey_start():
     """Start collecting RSSI samples for ONE grid cell.
 
-    Body: { "x": 0.0, "y": 0.0, "samples_target": 50 }
+    Body: { "session_id": "phone-id", "x": 0.0, "y": 0.0, "samples_target": 50 }
 
-    Replaces any in-progress session. The frontend specifies samples_target
-    per cell — there is no global default beyond the minimum of 1.
+    Replaces any in-progress session for that same session_id. Other phones'
+    active sessions are unaffected. The frontend specifies samples_target per
+    cell — there is no global default beyond the minimum of 1.
     """
     data = request.get_json(force=True) or {}
+    session_id = _survey_session_id(data)
     try:
         x = float(data["x"])
         y = float(data["y"])
@@ -550,7 +558,7 @@ def survey_start():
     except (TypeError, ValueError):
         return jsonify({"error": "samples_target must be an integer"}), 400
 
-    snap = survey_collector.start(x, y, samples_target)
+    snap = survey_collector.start(x, y, samples_target, session_id=session_id)
     return jsonify({"status": "survey started", **snap})
 
 
@@ -564,23 +572,41 @@ def survey_events():
     Returns 409 if no survey is active.
     """
     data = request.get_json(force=True) or {}
+    session_id = _survey_session_id(data)
     events = data.get("events")
     if events is None and "beacon_id" in data and "rssi" in data:
         events = [{"beacon_id": data["beacon_id"], "rssi": data["rssi"]}]
     if not isinstance(events, list):
         return jsonify({"error": "events list required"}), 400
 
-    if not survey_collector.is_active():
+    if not survey_collector.is_active(session_id):
         return jsonify({"error": "no active survey session — call /survey/start"}), 409
 
-    applied = survey_collector.ingest_events(events)
-    snap = survey_collector.progress()
+    beacon_id_by_name = {
+        str(entry.get("name")): str(entry.get("id"))
+        for entry in beacon_store.as_dict().values()
+        if entry.get("name") and entry.get("id")
+    }
+    canonical_events = []
+    for event in events:
+        if not isinstance(event, dict):
+            canonical_events.append(event)
+            continue
+        beacon_name = event.get("beacon_name") or event.get("name")
+        canonical_id = beacon_id_by_name.get(str(beacon_name))
+        if canonical_id:
+            canonical_events.append({**event, "beacon_id": canonical_id})
+        else:
+            canonical_events.append(event)
+
+    applied = survey_collector.ingest_events(canonical_events, session_id=session_id)
+    snap = survey_collector.progress(session_id)
     return jsonify({"applied": applied, "received": len(events), **(snap or {})})
 
 
 @app.route("/survey/progress", methods=["GET"])
 def survey_progress():
-    snap = survey_collector.progress()
+    snap = survey_collector.progress(_survey_session_id())
     if snap is None:
         return jsonify({"active": False})
     return jsonify({"active": True, **snap})
@@ -596,9 +622,10 @@ def survey_finalize():
         carries the full beacon dimension expected by downstream consumers.
     """
     data = request.get_json(silent=True) or {}
+    session_id = _survey_session_id(data)
     expected = data.get("expected_beacons") or []
 
-    buf = survey_collector.take_buffer()
+    buf = survey_collector.take_buffer(session_id)
     if buf is None:
         return jsonify({"error": "no active survey session"}), 409
 
@@ -618,7 +645,8 @@ def survey_finalize():
 
 @app.route("/survey/cancel", methods=["POST"])
 def survey_cancel():
-    was_active = survey_collector.cancel()
+    data = request.get_json(silent=True) or {}
+    was_active = survey_collector.cancel(_survey_session_id(data))
     return jsonify({"status": "cancelled" if was_active else "no active session"})
 
 
