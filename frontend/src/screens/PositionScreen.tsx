@@ -8,7 +8,7 @@ import {
 } from 'react-native';
 import {bleScanner} from '../services/bleScanner';
 import {api, PipelineBeaconSetup} from '../services/api';
-import {loadBeaconConfig, getBeaconConfig} from '../config/beaconConfig';
+import {loadBeaconConfig} from '../config/beaconConfig';
 
 interface PositionData {
   distances: Record<string, number>;
@@ -82,7 +82,7 @@ export default function PositionScreen() {
     //    RSSI Profile screen (auto-saved) or entered by hand on the
     //    Beacons tab. Beacons without q/r fall back to the backend's
     //    global default; we surface a warning for those.
-    const config = getBeaconConfig();
+    const config = await loadBeaconConfig();
     const beacons: PipelineBeaconSetup[] = Object.values(config).map(b => {
       const hasQR =
         typeof b.q === 'number' &&
