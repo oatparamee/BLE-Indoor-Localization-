@@ -1,0 +1,56 @@
+====================================================================
+  BLE FINGERPRINT — R AND Q SUMMARY
+====================================================================
+
+Survey:        91 cells
+Beacons:       13 configured (91 appear in fingerprint)
+Floor RSSI:    -110.00 dBm (min observed sample, used for not-heard substitution)
+
+--------------------------------------------------------------------
+MEASUREMENT NOISE R (4D KF observes [x, y])
+--------------------------------------------------------------------
+Estimated from leave-one-out cross-validation on the survey:
+
+  R (m^2) =
+  [  17.2520   -0.0537]
+  [  -0.0537   57.7218]
+
+  variance(x) = 17.2520 m^2  -> std(x) = 4.154 m
+  variance(y) = 57.7218 m^2  -> std(y) = 7.597 m
+  covariance  = -0.0537
+
+  Match RMSE  = 8.659 m  (n = 91 cells)
+  Mean residual = (+0.016, -0.175) m  (systematic bias)
+
+--------------------------------------------------------------------
+PROCESS NOISE Q (constant-velocity, sigma_a = 0.5 m/s^2)
+--------------------------------------------------------------------
+Continuous white-noise acceleration model:
+  Q(dt) = sigma_a^2 *
+          [[dt^4/4, 0,      dt^3/2, 0     ],
+           [0,      dt^4/4, 0,      dt^3/2],
+           [dt^3/2, 0,      dt^2,   0     ],
+           [0,      dt^3/2, 0,      dt^2  ]]
+
+Sample Q at common polling intervals:
+
+  dt = 0.25 s:
+  [   0.0002    0.0000    0.0020    0.0000]
+  [   0.0000    0.0002    0.0000    0.0020]
+  [   0.0020    0.0000    0.0156    0.0000]
+  [   0.0000    0.0020    0.0000    0.0156]
+
+  dt = 0.5 s:
+  [   0.0039    0.0000    0.0156    0.0000]
+  [   0.0000    0.0039    0.0000    0.0156]
+  [   0.0156    0.0000    0.0625    0.0000]
+  [   0.0000    0.0156    0.0000    0.0625]
+
+  dt = 1.0 s:
+  [   0.0625    0.0000    0.1250    0.0000]
+  [   0.0000    0.0625    0.0000    0.1250]
+  [   0.1250    0.0000    0.2500    0.0000]
+  [   0.0000    0.1250    0.0000    0.2500]
+
+Tune sigma_a higher to make the filter snappier (trust measurements more).
+Tune sigma_a lower to make it smoother / laggier (trust the motion model more).
