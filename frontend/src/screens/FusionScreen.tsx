@@ -7,6 +7,7 @@ import {
   ScrollView,
   StyleSheet,
   Alert,
+  PanResponder,
 } from 'react-native';
 import {useFocusEffect} from '@react-navigation/native';
 import Svg, {Circle, Line, Polyline, G, Text as SvgText} from 'react-native-svg';
@@ -81,6 +82,28 @@ export default function FusionScreen() {
   const [trail, setTrail] = useState<Array<{x: number; y: number}>>([]);
   const [sigmaAInput, setSigmaAInput] = useState('0.5');
   const [pathSegments, setPathSegments] = useState<PathSegment[]>([]);
+  // Map zoom in px-per-meter. 12 was the previous hard-coded scale; we
+  // keep it as the default so the map opens the same as before. The
+  // user can pinch via two fingers (Google Maps-style) or use the
+  // +/−/Fit buttons.
+  const [mapScale, setMapScale] = useState(12);
+  // Pan offset (in screen pixels). Applied as a translate transform on
+  // the SVG wrapper so dragging is GPU-cheap and doesn't re-render the
+  // hundreds of SVG primitives.
+  const [pan, setPan] = useState({x: 0, y: 0});
+  // Measured viewport for the map container, used by "Fit" to compute
+  // the largest scale that still shows the whole bbox at once.
+  const [mapViewport, setMapViewport] = useState({width: 0, height: 0});
+  // Refs so the PanResponder (created once) can read the current scale
+  // and pan WITHOUT re-binding on every change.
+  const scaleRef = useRef(mapScale);
+  const panRef = useRef(pan);
+  useEffect(() => {
+    scaleRef.current = mapScale;
+  }, [mapScale]);
+  useEffect(() => {
+    panRef.current = pan;
+  }, [pan]);
 
   const flushIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -295,12 +318,152 @@ export default function FusionScreen() {
   }, [beacons, trail, position, pathSegments]);
 
   const PADDING = 30;
-  const SCALE = 12; // px per meter — modest so the long corridor fits
-  const svgW = bbox ? (bbox.xMax - bbox.xMin) * SCALE + PADDING * 2 : 240;
-  const svgH = bbox ? (bbox.yMax - bbox.yMin) * SCALE + PADDING * 2 : 240;
-  const toSvgX = (x: number) => PADDING + (x - (bbox?.xMin ?? 0)) * SCALE;
+  const MIN_SCALE = 3;
+  const MAX_SCALE = 80;
+  const svgW = bbox ? (bbox.xMax - bbox.xMin) * mapScale + PADDING * 2 : 240;
+  const svgH = bbox ? (bbox.yMax - bbox.yMin) * mapScale + PADDING * 2 : 240;
+  const toSvgX = (x: number) => PADDING + (x - (bbox?.xMin ?? 0)) * mapScale;
   const toSvgY = (y: number) =>
-    svgH - PADDING - (y - (bbox?.yMin ?? 0)) * SCALE;
+    svgH - PADDING - (y - (bbox?.yMin ?? 0)) * mapScale;
+
+  const clampScale = (s: number) =>
+    Math.max(MIN_SCALE, Math.min(MAX_SCALE, s));
+  const zoomBy = useCallback((factor: number) => {
+    // Zoom around the centre of the viewport. With no measured viewport
+    // yet (very first render), just scale without adjusting pan.
+    setMapScale(prev => {
+      const next = clampScale(prev * factor);
+      const ratio = next / prev;
+      if (mapViewport.width > 0 && mapViewport.height > 0) {
+        const cx = mapViewport.width / 2;
+        const cy = mapViewport.height / 2;
+        setPan(p => ({
+          x: cx - (cx - p.x) * ratio,
+          y: cy - (cy - p.y) * ratio,
+        }));
+      }
+      return next;
+    });
+  }, [mapViewport]);
+  const fitToViewport = useCallback(() => {
+    if (!bbox || mapViewport.width === 0 || mapViewport.height === 0) return;
+    const wMeters = bbox.xMax - bbox.xMin;
+    const hMeters = bbox.yMax - bbox.yMin;
+    if (wMeters <= 0 || hMeters <= 0) return;
+    const fitW = (mapViewport.width - PADDING * 2) / wMeters;
+    const fitH = (mapViewport.height - PADDING * 2) / hMeters;
+    setMapScale(clampScale(Math.min(fitW, fitH)));
+    // Centre the SVG inside the viewport
+    setPan({x: 0, y: 0});
+  }, [bbox, mapViewport]);
+
+  // ── Two-finger pinch zoom + one-finger pan (Google Maps style) ─
+
+  // Initial state of a gesture, captured on touch-down. All deltas are
+  // computed relative to this snapshot, so the gesture remains stable
+  // even when React re-renders between move events.
+  const gestureRef = useRef<{
+    fingers: number;
+    // First touch position(s) in page coordinates
+    midX: number;
+    midY: number;
+    // Initial distance between the two fingers (pinch only)
+    dist: number;
+    // Pan + scale at gesture start
+    panX: number;
+    panY: number;
+    scale: number;
+  } | null>(null);
+
+  const pinchDistance = (touches: any[]) => {
+    const dx = touches[0].pageX - touches[1].pageX;
+    const dy = touches[0].pageY - touches[1].pageY;
+    return Math.hypot(dx, dy);
+  };
+
+  const panResponder = useRef(
+    PanResponder.create({
+      // Become the responder for any touch that starts inside the map.
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderTerminationRequest: () => false,
+
+      onPanResponderGrant: evt => {
+        const touches = evt.nativeEvent.touches;
+        if (touches.length >= 2) {
+          gestureRef.current = {
+            fingers: 2,
+            midX: (touches[0].pageX + touches[1].pageX) / 2,
+            midY: (touches[0].pageY + touches[1].pageY) / 2,
+            dist: pinchDistance(touches),
+            panX: panRef.current.x,
+            panY: panRef.current.y,
+            scale: scaleRef.current,
+          };
+        } else if (touches.length === 1) {
+          gestureRef.current = {
+            fingers: 1,
+            midX: touches[0].pageX,
+            midY: touches[0].pageY,
+            dist: 0,
+            panX: panRef.current.x,
+            panY: panRef.current.y,
+            scale: scaleRef.current,
+          };
+        }
+      },
+
+      onPanResponderMove: (evt, gestureState) => {
+        const initial = gestureRef.current;
+        if (!initial) return;
+        const touches = evt.nativeEvent.touches;
+
+        if (touches.length >= 2) {
+          // Re-seed if the user added a finger mid-gesture so the
+          // pinch starts smoothly from the new midpoint/distance.
+          if (initial.fingers !== 2) {
+            gestureRef.current = {
+              fingers: 2,
+              midX: (touches[0].pageX + touches[1].pageX) / 2,
+              midY: (touches[0].pageY + touches[1].pageY) / 2,
+              dist: pinchDistance(touches),
+              panX: panRef.current.x,
+              panY: panRef.current.y,
+              scale: scaleRef.current,
+            };
+            return;
+          }
+          const currentDist = pinchDistance(touches);
+          if (initial.dist <= 0) return;
+          const newScale = Math.max(
+            MIN_SCALE,
+            Math.min(MAX_SCALE, initial.scale * (currentDist / initial.dist)),
+          );
+          const ratio = newScale / initial.scale;
+          // Zoom anchored at the initial midpoint between the two
+          // fingers — same feel as Google Maps. The midpoint stays
+          // pinned to the same screen pixel as scale changes.
+          const newPanX = initial.midX - (initial.midX - initial.panX) * ratio;
+          const newPanY = initial.midY - (initial.midY - initial.panY) * ratio;
+          setMapScale(newScale);
+          setPan({x: newPanX, y: newPanY});
+        } else if (touches.length === 1 && initial.fingers === 1) {
+          // 1-finger pan: translate by the gesture delta from start.
+          setPan({
+            x: initial.panX + gestureState.dx,
+            y: initial.panY + gestureState.dy,
+          });
+        }
+      },
+
+      onPanResponderRelease: () => {
+        gestureRef.current = null;
+      },
+      onPanResponderTerminate: () => {
+        gestureRef.current = null;
+      },
+    }),
+  ).current;
 
   const trailPoints = trail
     .map(p => `${toSvgX(p.x)},${toSvgY(p.y)}`)
@@ -446,9 +609,56 @@ export default function FusionScreen() {
       {/* Map */}
       {bbox && (
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Map</Text>
-          <ScrollView horizontal style={styles.svgScroll}>
-            <Svg width={svgW} height={svgH}>
+          <View style={styles.mapHeaderRow}>
+            <Text style={styles.sectionTitle}>Map</Text>
+            <View style={styles.zoomBar}>
+              <TouchableOpacity
+                onPress={() => zoomBy(1 / 1.4)}
+                style={[
+                  styles.zoomButton,
+                  mapScale <= MIN_SCALE + 1e-6 && styles.zoomButtonDisabled,
+                ]}
+                disabled={mapScale <= MIN_SCALE + 1e-6}>
+                <Text style={styles.zoomButtonText}>−</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={fitToViewport}
+                style={styles.zoomFitButton}>
+                <Text style={styles.zoomFitText}>Fit</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => zoomBy(1.4)}
+                style={[
+                  styles.zoomButton,
+                  mapScale >= MAX_SCALE - 1e-6 && styles.zoomButtonDisabled,
+                ]}
+                disabled={mapScale >= MAX_SCALE - 1e-6}>
+                <Text style={styles.zoomButtonText}>+</Text>
+              </TouchableOpacity>
+              <Text style={styles.zoomScaleLabel}>
+                {mapScale.toFixed(1)} px/m
+              </Text>
+            </View>
+          </View>
+          {/* Pinch-zoom + drag-pan, Google Maps style. Two fingers
+              zoom around their midpoint; one finger pans. The SVG is
+              clipped to this fixed-height viewport. */}
+          <View
+            style={styles.svgScroll}
+            onLayout={e => {
+              const {width, height} = e.nativeEvent.layout;
+              setMapViewport({width, height});
+            }}
+            {...panResponder.panHandlers}>
+            <View
+              pointerEvents="none"
+              style={{
+                transform: [
+                  {translateX: pan.x},
+                  {translateY: pan.y},
+                ],
+              }}>
+              <Svg width={svgW} height={svgH}>
               {/* Walkable path — drawn beneath everything else so the
                   beacons / position circles read on top. */}
               {pathSegments.map((s, i) => (
@@ -536,8 +746,9 @@ export default function FusionScreen() {
                   </SvgText>
                 </G>
               ))}
-            </Svg>
-          </ScrollView>
+              </Svg>
+            </View>
+          </View>
           <View style={styles.legendRow}>
             <View style={[styles.legendDot, {backgroundColor: '#58a6ff'}]} />
             <Text style={styles.legendText}>beacon</Text>
@@ -736,6 +947,59 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     borderWidth: 1,
     borderColor: '#30363d',
+    // Cap the visible height — the PanResponder handles panning and
+    // pinching beyond the viewport edges.
+    height: 360,
+    // Clip the translated SVG to the viewport rectangle.
+    overflow: 'hidden',
+  },
+  mapHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  zoomBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  zoomButton: {
+    width: 32,
+    height: 28,
+    borderRadius: 6,
+    backgroundColor: '#21262d',
+    borderColor: '#30363d',
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 6,
+  },
+  zoomButtonDisabled: {opacity: 0.35},
+  zoomButtonText: {
+    color: '#e6edf3',
+    fontSize: 18,
+    fontWeight: '600',
+    lineHeight: 18,
+  },
+  zoomFitButton: {
+    paddingHorizontal: 10,
+    height: 28,
+    borderRadius: 6,
+    backgroundColor: '#21262d',
+    borderColor: '#30363d',
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 6,
+  },
+  zoomFitText: {color: '#58a6ff', fontSize: 12, fontWeight: '600'},
+  zoomScaleLabel: {
+    color: '#6e7681',
+    fontSize: 10,
+    fontFamily: 'monospace',
+    marginLeft: 8,
+    minWidth: 56,
+    textAlign: 'right',
   },
   legendRow: {
     flexDirection: 'row',
