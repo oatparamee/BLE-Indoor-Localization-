@@ -9,6 +9,9 @@ Writes (PNG, 200 DPI):
     backend/data/plots/01_survey_layout.png
     backend/data/plots/02_rssi_heatmaps.png
     backend/data/plots/03_distance_vs_rssi.png
+    backend/data/plots/03_rssi_histogram.png
+    backend/data/plots/03_distance_binned_boxplot.png
+    backend/data/plots/03_per_beacon_trends.png
     backend/data/plots/04_loo_error_map.png
     backend/data/plots/05_loo_error_distribution.png
 
@@ -160,14 +163,13 @@ def main():
     plt.close()
     print("  wrote 02_rssi_heatmaps.png")
 
-    # ── 3. Distance vs RSSI (path-loss view) ──────────────────────
-    fig, ax = plt.subplots(figsize=(10, 6))
-    cmap = plt.cm.tab20
-    for i, bid in enumerate(beacon_ids):
+    # ── 3. Distance vs RSSI (2D histogram path-loss view) ─────────
+    all_dists = []
+    all_means = []
+    for bid in beacon_ids:
         anchor = beacons_by_id.get(bid)
         if anchor is None:
             continue
-        dists, means = [], []
         for c in cells:
             entry = c["beacons"].get(bid)
             if entry is None:
@@ -175,23 +177,187 @@ def main():
             d = math.hypot(c["x"] - anchor["x"], c["y"] - anchor["y"])
             if d < 0.1:
                 continue
-            dists.append(d)
-            means.append(float(entry["mean"]))
-        if not dists:
-            continue
-        ax.scatter(dists, means, color=cmap(i % 20), s=18,
-                   alpha=0.6, label=beacon_names[i])
+            all_dists.append(d)
+            all_means.append(float(entry["mean"]))
 
-    ax.set_xscale("log")
-    ax.set_xlabel("Distance from beacon (m, log scale)")
-    ax.set_ylabel("Mean RSSI at cell (dBm)")
-    ax.set_title("Path-loss view — cell mean RSSI vs. straight-line distance")
-    ax.grid(True, which="both", alpha=0.3)
-    ax.legend(fontsize=7, ncols=2, loc="lower left")
-    plt.tight_layout()
-    plt.savefig(os.path.join(PLOTS_DIR, "03_distance_vs_rssi.png"), dpi=DPI)
-    plt.close()
-    print("  wrote 03_distance_vs_rssi.png")
+    if not all_dists:
+        print("WARNING: no distance/RSSI pairs found — skipping plot 03")
+    else:
+        dists_arr = np.array(all_dists, dtype=float)
+        means_arr = np.array(all_means, dtype=float)
+
+        # Use log-spaced distance bins so the 2D histogram matches the
+        # original path-loss view's log-scaled distance axis.
+        dist_bins = np.logspace(
+            np.log10(dists_arr.min()),
+            np.log10(dists_arr.max()),
+            31,
+        )
+        rssi_bins = np.linspace(means_arr.min(), means_arr.max(), 31)
+
+        fig, ax = plt.subplots(figsize=(10, 6))
+        hist = ax.hist2d(dists_arr, means_arr, bins=[dist_bins, rssi_bins], cmap="plasma")
+        cb = plt.colorbar(hist[3], ax=ax)
+        cb.set_label("Number of cell-beacon pairs")
+        ax.set_xscale("log")
+        ax.set_xlabel("Distance from beacon (m, log scale)")
+        ax.set_ylabel("Mean RSSI at cell (dBm)")
+        ax.set_title("Path-loss view — 2D histogram of RSSI vs. distance")
+        ax.grid(True, which="both", alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(os.path.join(PLOTS_DIR, "03_distance_vs_rssi.png"), dpi=DPI)
+        plt.close()
+        print("  wrote 03_distance_vs_rssi.png")
+
+        # ── 3b. RSSI-only histogram ────────────────────────────────
+        fig, ax = plt.subplots(figsize=(9, 5))
+        ax.hist(means_arr, bins=25, color="#1f77b4", edgecolor="black", alpha=0.85)
+        ax.axvline(np.mean(means_arr), color="red", linestyle="--",
+                   label=f"Mean = {np.mean(means_arr):.2f} dBm")
+        ax.axvline(np.median(means_arr), color="green", linestyle="--",
+                   label=f"Median = {np.median(means_arr):.2f} dBm")
+        ax.set_xlabel("Mean RSSI at cell (dBm)")
+        ax.set_ylabel("Number of cell-beacon pairs")
+        ax.set_title("Distribution of mean RSSI values")
+        ax.grid(True, alpha=0.3)
+        ax.legend()
+        plt.tight_layout()
+        plt.savefig(os.path.join(PLOTS_DIR, "03_rssi_histogram.png"), dpi=DPI)
+        plt.close()
+        print("  wrote 03_rssi_histogram.png")
+
+        # ── 3c. Distance-binned RSSI boxplot ───────────────────────
+        box_bins = np.logspace(
+            np.log10(dists_arr.min()),
+            np.log10(dists_arr.max()),
+            7,
+        )
+        box_groups = []
+        box_labels = []
+        for left, right in zip(box_bins[:-1], box_bins[1:]):
+            in_bin = (dists_arr >= left) & (dists_arr < right)
+            if right == box_bins[-1]:
+                in_bin = (dists_arr >= left) & (dists_arr <= right)
+            vals = means_arr[in_bin]
+            if len(vals) == 0:
+                continue
+            box_groups.append(vals)
+            box_labels.append(f"{left:.1f}-{right:.1f}")
+
+        if box_groups:
+            fig, ax = plt.subplots(figsize=(11, 6))
+            bp = ax.boxplot(
+                box_groups,
+                tick_labels=box_labels,
+                patch_artist=True,
+                showfliers=False,
+            )
+            for patch in bp["boxes"]:
+                patch.set(facecolor="#4C78A8", alpha=0.75)
+            for median in bp["medians"]:
+                median.set(color="#D62728", linewidth=2)
+            ax.set_xlabel("Distance bin from beacon (m)")
+            ax.set_ylabel("Mean RSSI at cell (dBm)")
+            ax.set_title("Mean RSSI by distance bin")
+            ax.grid(True, axis="y", alpha=0.3)
+            plt.xticks(rotation=25, ha="right")
+            plt.tight_layout()
+            plt.savefig(os.path.join(PLOTS_DIR, "03_distance_binned_boxplot.png"),
+                        dpi=DPI)
+            plt.close()
+            print("  wrote 03_distance_binned_boxplot.png")
+        else:
+            print("WARNING: no populated distance bins — skipping boxplot")
+
+        # ── 3d. Per-beacon trend panels with spread band ────────────
+        trend_bins = np.logspace(
+            np.log10(dists_arr.min()),
+            np.log10(dists_arr.max()),
+            9,
+        )
+        trend_centers = np.sqrt(trend_bins[:-1] * trend_bins[1:])
+        ncols = 4
+        nrows = math.ceil(n_beacons / ncols)
+        fig, axes = plt.subplots(
+            nrows,
+            ncols,
+            figsize=(4.2 * ncols, 3.4 * nrows),
+            squeeze=False,
+            sharex=True,
+            sharey=True,
+        )
+        for idx, bid in enumerate(beacon_ids):
+            ax = axes[idx // ncols][idx % ncols]
+            anchor = beacons_by_id.get(bid)
+            if anchor is None:
+                ax.axis("off")
+                continue
+
+            beacon_dists = []
+            beacon_means = []
+            for c in cells:
+                entry = c["beacons"].get(bid)
+                if entry is None:
+                    continue
+                d = math.hypot(c["x"] - anchor["x"], c["y"] - anchor["y"])
+                if d < 0.1:
+                    continue
+                beacon_dists.append(d)
+                beacon_means.append(float(entry["mean"]))
+
+            if not beacon_dists:
+                ax.set_title(f"{beacon_names[idx]} (no data)", fontsize=9)
+                ax.axis("off")
+                continue
+
+            bd = np.array(beacon_dists, dtype=float)
+            bm = np.array(beacon_means, dtype=float)
+            ax.scatter(bd, bm, s=12, alpha=0.25, color="#4C78A8")
+
+            medians = []
+            p25 = []
+            p75 = []
+            centers = []
+            for left, right, center in zip(trend_bins[:-1], trend_bins[1:], trend_centers):
+                in_bin = (bd >= left) & (bd < right)
+                if right == trend_bins[-1]:
+                    in_bin = (bd >= left) & (bd <= right)
+                vals = bm[in_bin]
+                if len(vals) == 0:
+                    continue
+                centers.append(center)
+                medians.append(np.median(vals))
+                p25.append(np.percentile(vals, 25))
+                p75.append(np.percentile(vals, 75))
+
+            if centers:
+                centers = np.array(centers, dtype=float)
+                medians = np.array(medians, dtype=float)
+                p25 = np.array(p25, dtype=float)
+                p75 = np.array(p75, dtype=float)
+                ax.plot(centers, medians, color="#D62728", linewidth=2)
+                ax.fill_between(centers, p25, p75, color="#D62728", alpha=0.18)
+
+            ax.set_xscale("log")
+            ax.set_title(beacon_names[idx], fontsize=9)
+            ax.grid(True, which="both", alpha=0.2)
+            ax.tick_params(labelsize=7)
+
+        for j in range(n_beacons, nrows * ncols):
+            axes[j // ncols][j % ncols].axis("off")
+
+        fig.suptitle("Per-beacon RSSI vs. distance with median trend and IQR",
+                     fontsize=12, y=1.00)
+        for ax in axes[-1]:
+            if ax.axison:
+                ax.set_xlabel("Distance (m, log scale)", fontsize=8)
+        for row in axes:
+            row[0].set_ylabel("Mean RSSI (dBm)", fontsize=8)
+        plt.tight_layout()
+        plt.savefig(os.path.join(PLOTS_DIR, "03_per_beacon_trends.png"), dpi=DPI,
+                    bbox_inches="tight")
+        plt.close()
+        print("  wrote 03_per_beacon_trends.png")
 
     # ── LOO cross-validation ──────────────────────────────────────
     print("Running leave-one-out cross-validation...")
