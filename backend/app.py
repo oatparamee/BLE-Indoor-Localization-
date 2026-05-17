@@ -100,7 +100,14 @@ def beacons_upsert():
 
     Body:
         {"id": "AA:BB:CC:...", "name": "BCPro_0", "x": 0, "y": 0,
-         "q": 0.7143, "r": 1.29}     // q and r are optional
+         "q": 0.7143, "r": 1.29,
+         "uuid": "F7826DA6-4FA2-4E98-8024-BC5B71E0893E",
+         "major": 1, "minor": 7}
+
+    `q`, `r`, `uuid`, `major`, `minor` are optional. The (uuid, major,
+    minor) triple is the iBeacon hardware identity configured in
+    KBeaconPro; when present, the live pipeline uses it as the primary
+    match key so the beacon survives renames and iOS device.id drift.
 
     Returns the saved entry.
     """
@@ -123,7 +130,27 @@ def beacons_upsert():
     except (TypeError, ValueError):
         return jsonify({"error": "q and r must be numeric or null"}), 400
 
-    entry = beacon_store.upsert(str(bid), str(name), x, y, q=q_val, r=r_val)
+    uuid_raw = data.get("uuid")
+    uuid_val = str(uuid_raw).strip() if uuid_raw else None
+    major_raw = data.get("major")
+    minor_raw = data.get("minor")
+    try:
+        major_val = int(major_raw) if major_raw not in (None, "") else None
+        minor_val = int(minor_raw) if minor_raw not in (None, "") else None
+    except (TypeError, ValueError):
+        return jsonify({"error": "major/minor must be integers or null"}), 400
+
+    entry = beacon_store.upsert(
+        str(bid),
+        str(name),
+        x,
+        y,
+        q=q_val,
+        r=r_val,
+        uuid=uuid_val,
+        major=major_val,
+        minor=minor_val,
+    )
     beacon_store.save()
     return jsonify({"status": "saved", "beacon": entry})
 
@@ -181,40 +208,71 @@ def _canonicalize_events(events: list) -> list:
     """Translate event `beacon_id` to the canonical id from `BeaconStore`.
 
     BLE scanners report a `device.id` (MAC on Android, system UUID on
-    iOS) which can drift in case or across phone/Bluetooth-cache resets.
-    We accept that drift by also trusting the advertised name: if the
-    incoming event carries `beacon_name` (or `name`) AND that name maps
-    to a registered beacon, rewrite `beacon_id` to the registered id.
-    Also case-folds the BLE id and tries to match the registry's id
-    case-insensitively as a second fallback.
+    iOS) which can drift in case or across phone/Bluetooth-cache resets,
+    and an advertised name that the user can rewrite from KBeaconPro at
+    any time. We resolve each event to the canonical configured
+    `beacon_id` using the strongest identifier available, in priority
+    order:
+
+      1. iBeacon (uuid, major, minor) triple from the manufacturer data
+         — STABLE across phones because it's burnt into the beacon by
+         KBeaconPro. This is the preferred match.
+      2. Case-insensitive name match against the registry's name field.
+      3. Case-insensitive `beacon_id` match (legacy single-phone path
+         where the device.id happened to land in the registry).
 
     Returns a fresh list — never mutates `events` in place.
     """
     registry = beacon_store.as_dict()
-    by_name = {
-        str(entry.get("name")).strip(): str(entry.get("id"))
-        for entry in registry.values()
-        if entry.get("name") and entry.get("id")
-    }
-    by_upper_id = {
-        str(entry.get("id")).upper(): str(entry.get("id"))
-        for entry in registry.values()
-        if entry.get("id")
-    }
+    by_name = {}
+    by_upper_id = {}
+    by_ibeacon = {}  # (uuid_upper, major, minor) -> canonical id
+    for entry in registry.values():
+        bid = entry.get("id")
+        if not bid:
+            continue
+        bid_str = str(bid)
+        nm = entry.get("name")
+        if nm:
+            by_name[str(nm).strip().lower()] = bid_str
+        by_upper_id[bid_str.upper()] = bid_str
+        u = entry.get("uuid")
+        mj = entry.get("major")
+        mn = entry.get("minor")
+        if u and mj is not None and mn is not None:
+            try:
+                key = (str(u).upper(), int(mj) & 0xFFFF, int(mn) & 0xFFFF)
+                by_ibeacon[key] = bid_str
+            except (TypeError, ValueError):
+                pass
 
     canonical = []
     for event in events:
         if not isinstance(event, dict):
             canonical.append(event)
             continue
-        beacon_name = event.get("beacon_name") or event.get("name")
-        beacon_id = event.get("beacon_id") or event.get("id")
-        # Prefer the name → canonical id mapping when it exists. Names
-        # are authoritative because the user typed them on the Setup
-        # tab and they survive cross-phone UUID drift on iOS.
-        canonical_id = by_name.get(str(beacon_name).strip()) if beacon_name else None
-        if canonical_id is None and beacon_id is not None:
-            canonical_id = by_upper_id.get(str(beacon_id).upper())
+        canonical_id = None
+
+        u = event.get("ibeacon_uuid")
+        mj = event.get("ibeacon_major")
+        mn = event.get("ibeacon_minor")
+        if u and mj is not None and mn is not None:
+            try:
+                key = (str(u).upper(), int(mj) & 0xFFFF, int(mn) & 0xFFFF)
+                canonical_id = by_ibeacon.get(key)
+            except (TypeError, ValueError):
+                pass
+
+        if canonical_id is None:
+            beacon_name = event.get("beacon_name") or event.get("name")
+            if beacon_name:
+                canonical_id = by_name.get(str(beacon_name).strip().lower())
+
+        if canonical_id is None:
+            beacon_id = event.get("beacon_id") or event.get("id")
+            if beacon_id is not None:
+                canonical_id = by_upper_id.get(str(beacon_id).upper())
+
         if canonical_id is not None:
             canonical.append({**event, "beacon_id": canonical_id})
         else:

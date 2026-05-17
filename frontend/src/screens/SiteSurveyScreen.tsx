@@ -147,7 +147,21 @@ export default function SiteSurveyScreen() {
   const doStart = async (target: number) => {
     try {
       const sessionId = surveySessionIdRef.current;
-      const beaconIdByName = new Map(beacons.map(b => [b.name, b.id]));
+      // Build canonicalisation lookups (same priority as FusionScreen):
+      // iBeacon (uuid, major, minor) > name (case-insensitive) > id.
+      const byIBeacon = new Map<string, string>();
+      const byNameLower = new Map<string, string>();
+      const knownIds = new Set<string>();
+      for (const b of beacons) {
+        knownIds.add(b.id);
+        if (b.name) byNameLower.set(b.name.trim().toLowerCase(), b.id);
+        if (b.uuid && b.major !== undefined && b.minor !== undefined) {
+          byIBeacon.set(
+            `${b.uuid.toUpperCase()}|${b.major}|${b.minor}`,
+            b.id,
+          );
+        }
+      }
       const snap = await api.surveyStart(x as number, y as number, target, sessionId);
       bleScanner.drainRawEvents();
       setProgress({active: true, ...snap});
@@ -156,15 +170,40 @@ export default function SiteSurveyScreen() {
       flushIntervalRef.current = setInterval(async () => {
         const events = bleScanner.drainRawEvents();
         if (events.length === 0) return;
-        try {
-          await api.surveyEvents(
-            events.map(e => ({
-              beacon_id: beaconIdByName.get(e.beacon_name) ?? e.beacon_id,
+        const mapped = events
+          .map(e => {
+            let canonicalId: string | undefined;
+            if (
+              e.ibeacon_uuid &&
+              e.ibeacon_major !== null &&
+              e.ibeacon_major !== undefined &&
+              e.ibeacon_minor !== null &&
+              e.ibeacon_minor !== undefined
+            ) {
+              canonicalId = byIBeacon.get(
+                `${e.ibeacon_uuid.toUpperCase()}|${e.ibeacon_major}|${e.ibeacon_minor}`,
+              );
+            }
+            if (!canonicalId && e.beacon_name) {
+              canonicalId = byNameLower.get(e.beacon_name.trim().toLowerCase());
+            }
+            if (!canonicalId && knownIds.has(e.beacon_id)) {
+              canonicalId = e.beacon_id;
+            }
+            if (!canonicalId) return null;
+            return {
+              beacon_id: canonicalId,
               beacon_name: e.beacon_name,
               rssi: e.rssi,
-            })),
-            sessionId,
-          );
+              ibeacon_uuid: e.ibeacon_uuid ?? null,
+              ibeacon_major: e.ibeacon_major ?? null,
+              ibeacon_minor: e.ibeacon_minor ?? null,
+            };
+          })
+          .filter((e): e is NonNullable<typeof e> => e !== null);
+        if (mapped.length === 0) return;
+        try {
+          await api.surveyEvents(mapped, sessionId);
         } catch {}
       }, 400);
 

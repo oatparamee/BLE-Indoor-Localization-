@@ -198,24 +198,58 @@ export default function FusionScreen() {
           setEventsSent(0);
           return;
         }
-        // Translate advertised name to the registered beacon id so the
-        // matcher recognises the observation, then drop any reading
-        // whose name/id is NOT in the registry. Without this filter,
-        // other BCPro devices in the same building (different lab,
-        // different floor, etc.) would push noise into _latest_rssi.
-        const byName = new Map(
-          beaconsRef.current.map(b => [b.name, b.id]),
-        );
-        const knownIds = new Set(beaconsRef.current.map(b => b.id));
+        // Canonicalise each raw event to a configured beacon and drop
+        // anything we don't recognise. Match priority (strongest first):
+        //   1. iBeacon (UUID, Major, Minor) from KBeaconPro — stable
+        //      across phones and survives a rename.
+        //   2. Case-insensitive advertised name match.
+        //   3. Direct device.id match (legacy single-phone fallback).
+        // Without this filter, neighbouring BCPro devices on other
+        // floors would push noise into _latest_rssi.
+        const byIBeacon = new Map<string, string>();
+        const byNameLower = new Map<string, string>();
+        const knownIds = new Set<string>();
+        for (const b of beaconsRef.current) {
+          knownIds.add(b.id);
+          if (b.name) byNameLower.set(b.name.trim().toLowerCase(), b.id);
+          if (b.uuid && b.major !== undefined && b.minor !== undefined) {
+            byIBeacon.set(
+              `${b.uuid.toUpperCase()}|${b.major}|${b.minor}`,
+              b.id,
+            );
+          }
+        }
         const filtered = events
-          .map(e => ({
-            beacon_id: byName.get(e.beacon_name) ?? e.beacon_id,
-            beacon_name: e.beacon_name,
-            rssi: e.rssi,
-          }))
-          .filter(
-            e => byName.has(e.beacon_name) || knownIds.has(e.beacon_id),
-          );
+          .map(e => {
+            let canonicalId: string | undefined;
+            if (
+              e.ibeacon_uuid &&
+              e.ibeacon_major !== null &&
+              e.ibeacon_major !== undefined &&
+              e.ibeacon_minor !== null &&
+              e.ibeacon_minor !== undefined
+            ) {
+              canonicalId = byIBeacon.get(
+                `${e.ibeacon_uuid.toUpperCase()}|${e.ibeacon_major}|${e.ibeacon_minor}`,
+              );
+            }
+            if (!canonicalId && e.beacon_name) {
+              canonicalId = byNameLower.get(e.beacon_name.trim().toLowerCase());
+            }
+            if (!canonicalId && knownIds.has(e.beacon_id)) {
+              canonicalId = e.beacon_id;
+            }
+            if (!canonicalId) return null;
+            return {
+              beacon_id: canonicalId,
+              beacon_name: e.beacon_name,
+              rssi: e.rssi,
+              ibeacon_uuid: e.ibeacon_uuid ?? null,
+              ibeacon_major: e.ibeacon_major ?? null,
+              ibeacon_minor: e.ibeacon_minor ?? null,
+            };
+          })
+          .filter((e): e is NonNullable<typeof e> => e !== null);
         if (filtered.length === 0) {
           setEventsSent(0);
           return;

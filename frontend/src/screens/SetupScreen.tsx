@@ -30,6 +30,9 @@ export default function SetupScreen() {
   const [yInput, setYInput] = useState('');
   const [qInput, setQInput] = useState('');
   const [rInput, setRInput] = useState('');
+  const [uuidInput, setUuidInput] = useState('');
+  const [majorInput, setMajorInput] = useState('');
+  const [minorInput, setMinorInput] = useState('');
   const [saveError, setSaveError] = useState('');
 
   const unsubRef = useRef<(() => void) | null>(null);
@@ -63,6 +66,7 @@ export default function SetupScreen() {
 
   const openModal = (id: string, advertisedName: string) => {
     const existing = getBeaconConfig()[id];
+    const reading = readingsRef.current[id];
     setEditTarget({id, advertisedName});
     setNameInput(existing?.name ?? advertisedName);
     setXInput(existing ? String(existing.x) : '');
@@ -72,6 +76,24 @@ export default function SetupScreen() {
     );
     setRInput(
       existing && typeof existing.r === 'number' ? String(existing.r) : '',
+    );
+    // Prefill iBeacon fields from the saved config first, then fall
+    // back to whatever the live advertisement carries (so a fresh
+    // beacon you tap "Set Up" on auto-populates).
+    setUuidInput(existing?.uuid ?? reading?.ibeacon?.uuid ?? '');
+    setMajorInput(
+      existing?.major !== undefined
+        ? String(existing.major)
+        : reading?.ibeacon
+        ? String(reading.ibeacon.major)
+        : '',
+    );
+    setMinorInput(
+      existing?.minor !== undefined
+        ? String(existing.minor)
+        : reading?.ibeacon
+        ? String(reading.ibeacon.minor)
+        : '',
     );
     setSaveError('');
   };
@@ -107,6 +129,48 @@ export default function SetupScreen() {
       r = rParsed;
     }
 
+    // iBeacon fields are all-or-nothing: a UUID without major/minor
+    // (or vice versa) can't be matched against advertisements, so we
+    // require either the full triple or nothing.
+    const uuidRaw = uuidInput.trim();
+    const majorRaw = majorInput.trim();
+    const minorRaw = minorInput.trim();
+    let uuid: string | undefined;
+    let major: number | undefined;
+    let minor: number | undefined;
+    if (uuidRaw !== '' || majorRaw !== '' || minorRaw !== '') {
+      if (uuidRaw === '' || majorRaw === '' || minorRaw === '') {
+        setSaveError(
+          'iBeacon UUID, Major, and Minor must all be filled in (or leave all three blank).',
+        );
+        return;
+      }
+      const cleanUuid = uuidRaw.toUpperCase();
+      const uuidValid = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/.test(
+        cleanUuid,
+      );
+      if (!uuidValid) {
+        setSaveError('UUID must be in 8-4-4-4-12 hex form (KBeaconPro format).');
+        return;
+      }
+      const majParsed = parseInt(majorRaw, 10);
+      const minParsed = parseInt(minorRaw, 10);
+      if (
+        !Number.isFinite(majParsed) ||
+        !Number.isFinite(minParsed) ||
+        majParsed < 0 ||
+        minParsed < 0 ||
+        majParsed > 65535 ||
+        minParsed > 65535
+      ) {
+        setSaveError('Major and Minor must be integers between 0 and 65535.');
+        return;
+      }
+      uuid = cleanUuid;
+      major = majParsed;
+      minor = minParsed;
+    }
+
     const beacon: SavedBeacon = {
       id: editTarget.id,
       name: nameInput.trim() || editTarget.advertisedName,
@@ -114,6 +178,7 @@ export default function SetupScreen() {
       y,
       ...(q !== undefined ? {q} : {}),
       ...(r !== undefined ? {r} : {}),
+      ...(uuid !== undefined ? {uuid, major, minor} : {}),
     };
     await saveBeacon(beacon);
     setConfig({...getBeaconConfig()});
@@ -162,6 +227,18 @@ export default function SetupScreen() {
                   <Text style={styles.beaconCoords}>
                     x: {beacon.x} m  ·  y: {beacon.y} m
                   </Text>
+                  {beacon.uuid &&
+                  beacon.major !== undefined &&
+                  beacon.minor !== undefined ? (
+                    <Text style={styles.beaconIBeacon}>
+                      iBeacon {beacon.major}.{beacon.minor} ·{' '}
+                      {beacon.uuid.slice(0, 8)}…
+                    </Text>
+                  ) : (
+                    <Text style={styles.beaconIBeaconMissing}>
+                      iBeacon UUID not set
+                    </Text>
+                  )}
                   {typeof beacon.q === 'number' && typeof beacon.r === 'number' ? (
                     <Text style={styles.beaconKalman}>
                       Q: {beacon.q.toFixed(4)}  ·  R: {beacon.r.toFixed(4)}
@@ -215,6 +292,12 @@ export default function SetupScreen() {
                   <View style={styles.beaconCardLeft}>
                     <Text style={styles.beaconName}>{dev.name}</Text>
                     <Text style={styles.beaconId}>{dev.id}</Text>
+                    {dev.ibeacon ? (
+                      <Text style={styles.beaconIBeacon}>
+                        iBeacon {dev.ibeacon.major}.{dev.ibeacon.minor} ·{' '}
+                        {dev.ibeacon.uuid.slice(0, 8)}…
+                      </Text>
+                    ) : null}
                   </View>
                   <View style={styles.beaconCardRight}>
                     <Text style={styles.rssi}>{dev.rawRssi ?? '?'} dBm</Text>
@@ -286,6 +369,47 @@ export default function SetupScreen() {
                   onChangeText={setYInput}
                   keyboardType="default"
                   placeholder="0.0"
+                  placeholderTextColor="#6e7681"
+                />
+              </View>
+            </View>
+
+            <Text style={styles.kalmanHint}>
+              iBeacon identity from KBeaconPro (recommended — stable
+              across phones and renames). Leave all three blank if you
+              haven't configured iBeacon mode on this beacon.
+            </Text>
+            <Text style={styles.fieldLabel}>UUID</Text>
+            <TextInput
+              style={styles.fieldInput}
+              value={uuidInput}
+              onChangeText={setUuidInput}
+              placeholder="F7826DA6-4FA2-4E98-8024-BC5B71E0893E"
+              placeholderTextColor="#6e7681"
+              autoCapitalize="characters"
+              autoCorrect={false}
+            />
+            <View style={styles.coordsRow}>
+              <View style={{flex: 1}}>
+                <Text style={styles.fieldLabel}>Major</Text>
+                <TextInput
+                  style={styles.fieldInput}
+                  value={majorInput}
+                  onChangeText={setMajorInput}
+                  keyboardType="number-pad"
+                  placeholder="e.g. 1"
+                  placeholderTextColor="#6e7681"
+                />
+              </View>
+              <View style={{width: 12}} />
+              <View style={{flex: 1}}>
+                <Text style={styles.fieldLabel}>Minor</Text>
+                <TextInput
+                  style={styles.fieldInput}
+                  value={minorInput}
+                  onChangeText={setMinorInput}
+                  keyboardType="number-pad"
+                  placeholder="e.g. 7"
                   placeholderTextColor="#6e7681"
                 />
               </View>
@@ -429,6 +553,18 @@ const styles = StyleSheet.create({
   beaconKalmanMissing: {
     fontSize: 11,
     color: '#d29922',
+    fontStyle: 'italic',
+    marginTop: 2,
+  },
+  beaconIBeacon: {
+    fontSize: 11,
+    color: '#58a6ff',
+    fontFamily: 'monospace',
+    marginTop: 2,
+  },
+  beaconIBeaconMissing: {
+    fontSize: 11,
+    color: '#8b949e',
     fontStyle: 'italic',
     marginTop: 2,
   },

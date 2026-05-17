@@ -61,6 +61,9 @@ class BeaconStore:
         y: float,
         q: Optional[float] = None,
         r: Optional[float] = None,
+        uuid: Optional[str] = None,
+        major: Optional[int] = None,
+        minor: Optional[int] = None,
     ) -> dict:
         entry = {
             "id": str(beacon_id),
@@ -72,6 +75,18 @@ class BeaconStore:
             entry["q"] = float(q)
         if r is not None:
             entry["r"] = float(r)
+        if uuid is not None and str(uuid).strip():
+            entry["uuid"] = str(uuid).strip().upper()
+        if major is not None:
+            try:
+                entry["major"] = int(major) & 0xFFFF
+            except (TypeError, ValueError):
+                pass
+        if minor is not None:
+            try:
+                entry["minor"] = int(minor) & 0xFFFF
+            except (TypeError, ValueError):
+                pass
         with self._lock:
             self._beacons[str(beacon_id)] = entry
         return entry
@@ -103,3 +118,49 @@ class BeaconStore:
     def count(self) -> int:
         with self._lock:
             return len(self._beacons)
+
+    # ── Lookup helpers used by the live canonicalisation path ─────
+
+    def find_by_ibeacon(
+        self,
+        uuid: Optional[str],
+        major: Optional[int],
+        minor: Optional[int],
+    ) -> Optional[dict]:
+        """Find a beacon by the iBeacon (uuid, major, minor) triple.
+
+        UUID comparison is case-insensitive. Returns None if any of the
+        inputs is missing or no beacon matches all three fields.
+        """
+        if not uuid or major is None or minor is None:
+            return None
+        try:
+            u = str(uuid).strip().upper()
+            mj = int(major) & 0xFFFF
+            mn = int(minor) & 0xFFFF
+        except (TypeError, ValueError):
+            return None
+        with self._lock:
+            for entry in self._beacons.values():
+                e_uuid = str(entry.get("uuid", "")).upper()
+                if not e_uuid or e_uuid != u:
+                    continue
+                if int(entry.get("major", -1)) != mj:
+                    continue
+                if int(entry.get("minor", -1)) != mn:
+                    continue
+                return dict(entry)
+        return None
+
+    def find_by_name(self, name: Optional[str]) -> Optional[dict]:
+        """Find a beacon by case-insensitive name match."""
+        if not name:
+            return None
+        target = str(name).strip().lower()
+        if not target:
+            return None
+        with self._lock:
+            for entry in self._beacons.values():
+                if str(entry.get("name", "")).strip().lower() == target:
+                    return dict(entry)
+        return None

@@ -22,6 +22,15 @@ export interface SavedBeacon {
   q?: number;
   /** Per-beacon 1D Kalman measurement noise — same rules as q. */
   r?: number;
+  /** Apple iBeacon proximity UUID configured in KBeaconPro
+   *  (upper-case 8-4-4-4-12). Optional — when present, the scanner
+   *  uses (uuid, major, minor) as the primary match key, which is
+   *  stable across phones unlike iOS CoreBluetooth's device.id. */
+  uuid?: string;
+  /** iBeacon Major (0-65535). */
+  major?: number;
+  /** iBeacon Minor (0-65535). */
+  minor?: number;
 }
 
 const LEGACY_STORAGE_KEY = '@ble_beacon_config_v1';
@@ -37,6 +46,15 @@ function normalize(b: PersistedBeacon | SavedBeacon): SavedBeacon {
   };
   if (typeof b.q === 'number' && Number.isFinite(b.q)) out.q = b.q;
   if (typeof b.r === 'number' && Number.isFinite(b.r)) out.r = b.r;
+  if (typeof b.uuid === 'string' && b.uuid.trim()) {
+    out.uuid = b.uuid.trim().toUpperCase();
+  }
+  if (typeof b.major === 'number' && Number.isFinite(b.major)) {
+    out.major = b.major;
+  }
+  if (typeof b.minor === 'number' && Number.isFinite(b.minor)) {
+    out.minor = b.minor;
+  }
   return out;
 }
 
