@@ -23,9 +23,22 @@ import time
 from typing import Optional
 
 from fingerprint import FingerprintStore
-from fingerprint_match import match
+from fingerprint_match import match_cells
 from position_kf import PositionKalmanFilter4D
 from r_estimator import estimate_r_loo
+
+
+def match_with_restricted_known(store: FingerprintStore, rssi_vector: dict, known, top_k: int):
+    """Same as fingerprint_match.match() but with an explicit known-set
+    so we can exclude rogue beacons that leaked into the fingerprint
+    but are not in the user's beacon registry."""
+    return match_cells(
+        cells=store.list_cells(),
+        rssi_vector=rssi_vector,
+        floor_rssi=store.floor_rssi(),
+        known_beacons=known,
+        top_k=top_k,
+    )
 
 
 # Default acceleration std (m/s²) for the constant-velocity process noise.
@@ -37,11 +50,23 @@ class FingerprintPipeline:
     def __init__(
         self,
         store: FingerprintStore,
+        beacon_store=None,
+        path_constraint=None,
         sigma_a: float = DEFAULT_SIGMA_A,
         beacon_timeout_s: float = 5.0,
         top_k: int = 4,
     ):
         self.store = store
+        # Optional: registered-beacons source of truth. When set, the
+        # matcher ignores any rogue beacon id that leaked into the
+        # fingerprint during the survey (e.g. someone else's BCPro in
+        # the same building). This keeps "live" comparable to the
+        # subset of beacons the user actually owns.
+        self.beacon_store = beacon_store
+        # Optional: corridor / walkable polyline. When set, the smoothed
+        # (x, y) returned by the KF is projected onto the nearest point
+        # of the polyline so the green dot never drifts into a wall.
+        self.path_constraint = path_constraint
         self.kf = PositionKalmanFilter4D(sigma_a=sigma_a)
         self.top_k = int(top_k)
         self.beacon_timeout_s = float(beacon_timeout_s)
@@ -114,13 +139,29 @@ class FingerprintPipeline:
 
     # ── Compute position ──────────────────────────────────────────
 
+    def _registered_ids_locked(self) -> Optional[set]:
+        """Return the set of beacon ids the user registered, or None if
+        no registry is wired. Caller's lock is irrelevant: BeaconStore
+        has its own lock."""
+        if self.beacon_store is None:
+            return None
+        return {str(entry.get("id")) for entry in self.beacon_store.list() if entry.get("id")}
+
     def update_position(self) -> Optional[dict]:
         with self._lock:
             self._prune_stale_locked()
             if not self._latest_rssi:
                 return None
 
-            known = self.store.known_beacons()
+            # The matcher's dimension is the intersection of "ids that
+            # the fingerprint has data for" AND "ids the user explicitly
+            # registered". Without that intersection, any rogue BCPro
+            # that leaked into the survey would contribute "noise" to
+            # every cell-vs-cell sq_dist.
+            fp_known = self.store.known_beacons()
+            registered = self._registered_ids_locked()
+            known = fp_known & registered if registered is not None else fp_known
+
             active = set(self._latest_rssi.keys())
             overlap = active & known
             # If no live beacon overlaps the fingerprint dimension every
@@ -139,24 +180,49 @@ class FingerprintPipeline:
             # dimension equal to the survey's beacon count.
             observation = {bid: None for bid in known}
             for bid, rssi in self._latest_rssi.items():
-                observation[bid] = rssi
+                if bid in known:
+                    observation[bid] = rssi
 
-            result = match(self.store, observation, top_k=self.top_k)
+            result = match_with_restricted_known(
+                self.store, observation, known=known, top_k=self.top_k
+            )
             if result is None:
                 return None
 
             now = time.time()
             kf_state = self.kf.update(result["x"], result["y"], now)
 
+            # Project the smoothed KF output onto the user-defined path
+            # so the green dot is clamped to the walkable corridors.
+            # The raw matcher output is left untouched so the UI can
+            # still show where the matcher actually placed the user.
+            sx, sy = kf_state["x"], kf_state["y"]
+            constrained = None
+            has_path = (
+                self.path_constraint is not None
+                and not self.path_constraint.is_empty()
+            )
+            if has_path:
+                px, py = self.path_constraint.project(sx, sy)
+                constrained = {"x": round(px, 4), "y": round(py, 4)}
+
             out = {
                 "raw_position": {
                     "x": round(result["x"], 4),
                     "y": round(result["y"], 4),
                 },
-                "smooth_position": {
-                    "x": round(kf_state["x"], 4),
-                    "y": round(kf_state["y"], 4),
+                "kf_position": {
+                    "x": round(sx, 4),
+                    "y": round(sy, 4),
                 },
+                # smooth_position is what the UI plots as the green dot.
+                # If a path is configured, it is the projection;
+                # otherwise it equals kf_position.
+                "smooth_position": constrained or {
+                    "x": round(sx, 4),
+                    "y": round(sy, 4),
+                },
+                "constrained_to_path": constrained is not None,
                 "velocity": {
                     "vx": round(kf_state["vx"], 4),
                     "vy": round(kf_state["vy"], 4),
@@ -176,8 +242,15 @@ class FingerprintPipeline:
     def get_status(self) -> dict:
         with self._lock:
             self._prune_stale_locked()
+            fp_known = self.store.known_beacons()
+            registered = self._registered_ids_locked()
+            known = fp_known & registered if registered is not None else fp_known
             return {
-                "registered_beacons": sorted(self.store.known_beacons()),
+                # "registered_beacons" is what the matcher actually uses
+                # (registry ∩ fingerprint) — clearer than dumping the
+                # raw fingerprint keys, which can include ghosts.
+                "registered_beacons": sorted(known),
+                "fingerprint_only_beacons": sorted(fp_known - known) if registered else [],
                 "active_beacons": sorted(self._latest_rssi.keys()),
                 "latest_rssi": dict(self._latest_rssi),
                 "sigma_a": self.kf.sigma_a,
@@ -189,6 +262,7 @@ class FingerprintPipeline:
                 "beacon_timeout_s": self.beacon_timeout_s,
                 "top_k": self.top_k,
                 "initialized": self.kf.initialized,
+                "has_path_constraint": self.path_constraint is not None,
             }
 
     # ── Internals ────────────────────────────────────────────────

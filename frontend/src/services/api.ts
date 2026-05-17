@@ -161,4 +161,15 @@ export const api = {
 
   /** Run LOO cross-val WITHOUT applying the result. For inspection. */
   fpREstimate: () => get('/fp/r/estimate'),
+
+  /** Fetch the walkable polyline used by the live pipeline. */
+  fpPathGet: () =>
+    get('/fp/path') as Promise<{
+      segments: {x1: number; y1: number; x2: number; y2: number}[];
+    }>,
+
+  /** Replace the walkable polyline. Pass empty list to disable. */
+  fpPathSet: (
+    segments: {x1: number; y1: number; x2: number; y2: number}[],
+  ) => post('/fp/path', {segments}),
 };
