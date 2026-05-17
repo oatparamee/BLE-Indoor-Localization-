@@ -1,39 +1,35 @@
 """
-Fingerprint matcher — Gaussian log-likelihood over surveyed grid cells.
+Fingerprint matcher — Euclidean nearest-neighbor in RSSI space.
 
-For each cell c with per-beacon (mu_b, sigma_b^2):
+For each surveyed cell c, compute the squared distance between the live
+observation vector z and the cell's stored mean vector μ:
 
-    log L(c | z) = sum_b [ -0.5 * ((z_b - mu_b)^2 / sigma_b^2
-                                   + log(2 pi sigma_b^2)) ]
+    d²(c, z) = Σ_b (z_b - μ_b)²
 
-Beacons stored as `null` at a cell (not heard during the survey) are
-treated as having mean = global floor RSSI and a fixed wide sigma
-(FLOOR_SIGMA) so a "not heard here either" observation supports that
-cell instead of catastrophically penalising it.
+Every beacon contributes equally — no per-beacon variance weighting.
+Beacons stored as `null` at a cell (not heard during the survey) and
+live observations marked None (not heard right now) both substitute the
+global floor RSSI, so the measurement vector always has dimension =
+#known_beacons and the units are consistent on both sides.
 
-Incoming observation z_b that is None (beacon not heard right now)
-substitutes the same floor — keeps the measurement vector dimension
-equal to #beacons, which is what the downstream KF expects.
-
-Position estimate = weighted centroid over the top-K cells, weights
-exp(loglik - max_loglik). Returns the best cell as a tiebreaker when
-only one cell exists.
+Position estimate = inverse-distance weighted centroid of the top-K
+nearest cells. Weights = 1 / (d + ε); an exact match (d = 0) gets the
+full weight via the epsilon. With Euclidean weighting, adjacent cells
+both contribute meaningfully, so the output interpolates between survey
+points rather than snapping to the single best one.
 """
 
 import math
 from typing import Optional
 
 
-# Std (dBm) assumed for floor-substituted beacons. Wide enough that a
-# missing beacon contributes information but does not dominate.
-FLOOR_SIGMA = 6.0
-
-# Variance floor (dBm^2). Cells with near-zero observed variance would
-# otherwise make the Gaussian arbitrarily peaked.
-SIGMA_FLOOR = 1.0
-
-# Number of cells averaged for the centroid.
+# Number of cells averaged for the inverse-distance centroid.
 TOP_K_DEFAULT = 4
+
+# Small constant added to the distance before inverting, so an exact
+# match (d = 0) doesn't blow up. Also caps the influence of the very
+# nearest cell so neighbouring cells still contribute meaningfully.
+DISTANCE_EPSILON = 1e-6
 
 
 def match(
@@ -41,7 +37,7 @@ def match(
     rssi_vector: dict,
     top_k: int = TOP_K_DEFAULT,
 ) -> Optional[dict]:
-    """Return the best-estimate (x, y) plus the top-K cells.
+    """Return the best-estimate (x, y) plus the top-K nearest cells.
 
     store: FingerprintStore
     rssi_vector: {beacon_id: float|None} — current observation.
@@ -63,60 +59,52 @@ def match_cells(
     known_beacons,
     top_k: int = TOP_K_DEFAULT,
 ) -> Optional[dict]:
-    """Lower-level matcher that operates on a precomputed cell list.
+    """Lower-level matcher operating on a precomputed cell list.
 
-    Use this directly when you need to exclude specific cells (e.g.
-    leave-one-out cross-validation for R estimation). For normal live
-    matching, call match(store, ...).
+    Used by leave-one-out cross-validation in r_estimator.py to score
+    each cell against the rest. For normal live matching, call match().
     """
     if not cells:
         return None
+    if floor_rssi is None:
+        # Without a floor we can't substitute missing values, so we
+        # can't keep the vector dimension fixed. Refuse to match.
+        return None
 
-    floor = floor_rssi
-    known_bids = set(known_beacons)
-
-    overlap = [b for b in rssi_vector.keys() if b in known_bids]
-    if not overlap and floor is None:
+    floor = float(floor_rssi)
+    known_bids = sorted(set(known_beacons))
+    if not known_bids:
         return None
 
     scored = []
     for cell in cells:
-        loglik = 0.0
-        contributions = 0
+        sq_dist = 0.0
+        cell_beacons = cell.get("beacons", {})
         for bid in known_bids:
-            entry = cell.get("beacons", {}).get(bid)
-            if entry is None:
-                if floor is None:
-                    continue
-                mu = floor
-                sigma2 = FLOOR_SIGMA * FLOOR_SIGMA
-            else:
-                mu = float(entry["mean"])
-                sigma2 = max(float(entry["var"]), SIGMA_FLOOR * SIGMA_FLOOR)
+            entry = cell_beacons.get(bid)
+            mu = float(entry["mean"]) if isinstance(entry, dict) else floor
 
             z = rssi_vector.get(bid)
-            if z is None:
-                z = floor
-                if z is None:
-                    continue
-            diff = float(z) - mu
-            loglik += -0.5 * (diff * diff / sigma2 + math.log(2.0 * math.pi * sigma2))
-            contributions += 1
+            z_val = float(z) if z is not None else floor
 
-        if contributions == 0:
-            continue
-        scored.append({"x": cell["x"], "y": cell["y"], "loglik": loglik, "n_beacons": contributions})
+            diff = z_val - mu
+            sq_dist += diff * diff
+        scored.append({
+            "x": cell["x"],
+            "y": cell["y"],
+            "sq_dist": sq_dist,
+            "n_beacons": len(known_bids),
+        })
 
     if not scored:
         return None
 
-    scored.sort(key=lambda c: c["loglik"], reverse=True)
+    scored.sort(key=lambda c: c["sq_dist"])
     top = scored[: max(1, int(top_k))]
-    max_l = top[0]["loglik"]
-    weights = [math.exp(c["loglik"] - max_l) for c in top]
+
+    weights = [1.0 / (math.sqrt(c["sq_dist"]) + DISTANCE_EPSILON) for c in top]
     wsum = sum(weights)
     if wsum <= 0:
-        # Numerical collapse — fall back to the best cell only.
         best = top[0]
         return {
             "x": best["x"],
@@ -135,7 +123,8 @@ def match_cells(
             {
                 "x": c["x"],
                 "y": c["y"],
-                "loglik": round(c["loglik"], 4),
+                "sq_dist": round(c["sq_dist"], 4),
+                "distance": round(math.sqrt(c["sq_dist"]), 4),
                 "weight": round(w / wsum, 6),
                 "n_beacons": c["n_beacons"],
             }

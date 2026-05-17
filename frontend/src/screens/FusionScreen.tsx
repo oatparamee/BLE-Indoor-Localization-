@@ -17,7 +17,8 @@ import {loadBeaconConfig, SavedBeacon} from '../config/beaconConfig';
 interface TopCell {
   x: number;
   y: number;
-  loglik: number;
+  distance: number;
+  sq_dist: number;
   weight: number;
   n_beacons: number;
 }
@@ -404,7 +405,7 @@ export default function FusionScreen() {
                 />
               </View>
               <Text style={styles.topCellWeight}>
-                {(c.weight * 100).toFixed(0)}%
+                d={c.distance.toFixed(1)} · {(c.weight * 100).toFixed(0)}%
               </Text>
             </View>
           ))}
@@ -580,7 +581,7 @@ const styles = StyleSheet.create({
   topCellWeight: {
     color: '#8b949e',
     fontSize: 11,
-    width: 36,
+    width: 96,
     fontFamily: 'monospace',
     textAlign: 'right',
   },
