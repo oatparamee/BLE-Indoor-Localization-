@@ -43,6 +43,7 @@ from beacons import BeaconStore
 from fingerprint import FingerprintStore
 from fingerprint_match import match as fingerprint_match
 from fingerprint_pipeline import FingerprintPipeline
+from path_constraint import PathConstraint
 from r_estimator import estimate_r_loo
 from survey import SurveyCollector
 
@@ -58,10 +59,20 @@ beacon_store = BeaconStore()
 fingerprint_store = FingerprintStore()
 survey_collector = SurveyCollector()
 
+# Walkable-corridor polyline. Read by the live pipeline to clamp the
+# smoothed (x, y) onto the path; exposed over /fp/path so the frontend
+# can render it and let the user edit it.
+path_constraint = PathConstraint()
+
 # Fingerprint-based live tracking pipeline. Reads the same
-# FingerprintStore the survey writes to. R is seeded from leave-one-out
-# cross-val on /fp/start.
-fp_pipeline = FingerprintPipeline(store=fingerprint_store)
+# FingerprintStore the survey writes to. The beacon_store is wired in
+# so the matcher only considers the user's registered anchors (and
+# ignores any rogue id that leaked into the fingerprint).
+fp_pipeline = FingerprintPipeline(
+    store=fingerprint_store,
+    beacon_store=beacon_store,
+    path_constraint=path_constraint,
+)
 
 
 # ---------- Health ----------
@@ -409,6 +420,10 @@ def fp_rssi_events():
     the BLE stack can drift from the id keying the fingerprint cells
     (e.g. iOS UUID case / per-phone identifier) and the matcher would
     silently floor-substitute every reading, freezing the position.
+
+    Events whose `beacon_id` still does not match a registered beacon
+    after canonicalisation are dropped, so unrelated BCPro advertisers
+    in the same building cannot pollute the matcher with noise.
     """
     data = request.get_json(force=True) or {}
     events = data.get("events")
@@ -417,8 +432,22 @@ def fp_rssi_events():
     if not isinstance(events, list):
         return jsonify({"error": "events list required"}), 400
     canonical_events = _canonicalize_events(events)
-    applied = fp_pipeline.ingest_events(canonical_events)
-    return jsonify({"applied": applied, "received": len(events)})
+    registered_ids = {str(entry.get("id")) for entry in beacon_store.list() if entry.get("id")}
+    if registered_ids:
+        filtered = [
+            ev for ev in canonical_events
+            if isinstance(ev, dict) and str(ev.get("beacon_id")) in registered_ids
+        ]
+        rejected_count = len(canonical_events) - len(filtered)
+    else:
+        filtered = canonical_events
+        rejected_count = 0
+    applied = fp_pipeline.ingest_events(filtered)
+    return jsonify({
+        "applied": applied,
+        "received": len(events),
+        "rejected_unregistered": rejected_count,
+    })
 
 
 @app.route("/fp/position/latest", methods=["GET"])
@@ -501,6 +530,33 @@ def fp_params():
 
     fp_pipeline.set_params(sigma_a=sa, r=r_np)
     return jsonify({"status": "updated", **fp_pipeline.get_status()})
+
+
+@app.route("/fp/path", methods=["GET"])
+def fp_path_get():
+    """Return the walkable polyline used by the live pipeline to clamp
+    the smoothed position. Each segment is `{"x1","y1","x2","y2"}` in
+    meters, same coordinate frame as the beacons."""
+    return jsonify({"segments": path_constraint.segments()})
+
+
+@app.route("/fp/path", methods=["POST"])
+def fp_path_set():
+    """Replace the polyline. Body: `{"segments": [...]}` — each segment
+    accepted as `{"x1","y1","x2","y2"}`, `[x1,y1,x2,y2]`, or
+    `[[x1,y1],[x2,y2]]`. Passing an empty list disables the constraint
+    (positions are returned unprojected).
+    """
+    data = request.get_json(force=True) or {}
+    segments = data.get("segments")
+    if not isinstance(segments, list):
+        return jsonify({"error": "segments list required"}), 400
+    path_constraint.set_segments(segments)
+    try:
+        path_constraint.save()
+    except OSError as exc:
+        return jsonify({"error": f"failed to persist path: {exc}"}), 500
+    return jsonify({"status": "saved", "segments": path_constraint.segments()})
 
 
 @app.route("/fp/r/estimate", methods=["GET"])

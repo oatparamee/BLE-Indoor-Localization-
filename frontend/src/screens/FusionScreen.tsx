@@ -9,7 +9,7 @@ import {
   Alert,
 } from 'react-native';
 import {useFocusEffect} from '@react-navigation/native';
-import Svg, {Circle, Polyline, G, Text as SvgText} from 'react-native-svg';
+import Svg, {Circle, Line, Polyline, G, Text as SvgText} from 'react-native-svg';
 import {bleScanner} from '../services/bleScanner';
 import {api} from '../services/api';
 import {loadBeaconConfig, SavedBeacon} from '../config/beaconConfig';
@@ -27,7 +27,9 @@ interface PositionResult {
   ready: boolean;
   reason?: string;
   raw_position?: {x: number; y: number};
+  kf_position?: {x: number; y: number};
   smooth_position?: {x: number; y: number};
+  constrained_to_path?: boolean;
   velocity?: {vx: number; vy: number};
   active_beacons?: string[];
   overlap_beacons?: string[];
@@ -35,6 +37,13 @@ interface PositionResult {
   top_cells?: TopCell[];
   floor_rssi?: number;
   initialized?: boolean;
+}
+
+interface PathSegment {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
 }
 
 interface REstimate {
@@ -71,6 +80,7 @@ export default function FusionScreen() {
   const [statusMsg, setStatusMsg] = useState('');
   const [trail, setTrail] = useState<Array<{x: number; y: number}>>([]);
   const [sigmaAInput, setSigmaAInput] = useState('0.5');
+  const [pathSegments, setPathSegments] = useState<PathSegment[]>([]);
 
   const flushIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -113,8 +123,9 @@ export default function FusionScreen() {
     };
   }, [stopAllIntervals]);
 
-  // Reload beacon list on every focus so positions added in the Beacons
-  // tab show up here without an app restart.
+  // Reload beacon list and walkable path on every focus so changes made
+  // in the Beacons tab (or via /fp/path) propagate without an app
+  // restart.
   useFocusEffect(
     useCallback(() => {
       loadBeaconConfig().then(cfg => {
@@ -122,6 +133,10 @@ export default function FusionScreen() {
         setBeacons(list);
         beaconsRef.current = list;
       });
+      api
+        .fpPathGet()
+        .then(res => setPathSegments(res?.segments ?? []))
+        .catch(() => setPathSegments([]));
     }, []),
   );
 
@@ -160,24 +175,32 @@ export default function FusionScreen() {
           setEventsSent(0);
           return;
         }
-        // Mirror SiteSurveyScreen: translate the advertised name to the
-        // registered beacon id so the backend's matcher recognises the
-        // observation. The backend route ALSO canonicalises (defence in
-        // depth) but doing it here keeps the wire format consistent and
-        // gives the user predictable behaviour offline-of-registry.
+        // Translate advertised name to the registered beacon id so the
+        // matcher recognises the observation, then drop any reading
+        // whose name/id is NOT in the registry. Without this filter,
+        // other BCPro devices in the same building (different lab,
+        // different floor, etc.) would push noise into _latest_rssi.
         const byName = new Map(
           beaconsRef.current.map(b => [b.name, b.id]),
         );
-        try {
-          await api.fpRssiEvents(
-            events.map(e => ({
-              beacon_id: byName.get(e.beacon_name) ?? e.beacon_id,
-              beacon_name: e.beacon_name,
-              rssi: e.rssi,
-            })),
+        const knownIds = new Set(beaconsRef.current.map(b => b.id));
+        const filtered = events
+          .map(e => ({
+            beacon_id: byName.get(e.beacon_name) ?? e.beacon_id,
+            beacon_name: e.beacon_name,
+            rssi: e.rssi,
+          }))
+          .filter(
+            e => byName.has(e.beacon_name) || knownIds.has(e.beacon_id),
           );
-          setEventsSent(events.length);
-          eventsSinceLastTickRef.current += events.length;
+        if (filtered.length === 0) {
+          setEventsSent(0);
+          return;
+        }
+        try {
+          await api.fpRssiEvents(filtered);
+          setEventsSent(filtered.length);
+          eventsSinceLastTickRef.current += filtered.length;
         } catch (err: any) {
           setStatusMsg(`RSSI flush error: ${err?.message ?? err}`);
         }
@@ -256,6 +279,10 @@ export default function FusionScreen() {
     const points: Array<{x: number; y: number}> = [...beacons];
     trail.forEach(p => points.push(p));
     if (position?.smooth_position) points.push(position.smooth_position);
+    pathSegments.forEach(s => {
+      points.push({x: s.x1, y: s.y1});
+      points.push({x: s.x2, y: s.y2});
+    });
     if (points.length === 0) return null;
     const xs = points.map(p => p.x);
     const ys = points.map(p => p.y);
@@ -265,7 +292,7 @@ export default function FusionScreen() {
       yMin: Math.floor(Math.min(...ys)) - 2,
       yMax: Math.ceil(Math.max(...ys)) + 2,
     };
-  }, [beacons, trail, position]);
+  }, [beacons, trail, position, pathSegments]);
 
   const PADDING = 30;
   const SCALE = 12; // px per meter — modest so the long corridor fits
@@ -422,6 +449,22 @@ export default function FusionScreen() {
           <Text style={styles.sectionTitle}>Map</Text>
           <ScrollView horizontal style={styles.svgScroll}>
             <Svg width={svgW} height={svgH}>
+              {/* Walkable path — drawn beneath everything else so the
+                  beacons / position circles read on top. */}
+              {pathSegments.map((s, i) => (
+                <Line
+                  key={`seg-${i}`}
+                  x1={toSvgX(s.x1)}
+                  y1={toSvgY(s.y1)}
+                  x2={toSvgX(s.x2)}
+                  y2={toSvgY(s.y2)}
+                  stroke="#30363d"
+                  strokeWidth={14}
+                  strokeLinecap="round"
+                  strokeOpacity={0.55}
+                />
+              ))}
+
               {/* Trail */}
               {trailPoints.length > 0 ? (
                 <Polyline
@@ -446,7 +489,22 @@ export default function FusionScreen() {
                 />
               ) : null}
 
-              {/* Smoothed position (bright) */}
+              {/* Unconstrained KF output — only shown when it actually
+                  differs from the projected position (i.e. the user
+                  has a path constraint configured). */}
+              {position?.constrained_to_path && position.kf_position ? (
+                <Circle
+                  cx={toSvgX(position.kf_position.x)}
+                  cy={toSvgY(position.kf_position.y)}
+                  r={4}
+                  fill="none"
+                  stroke="#8b949e"
+                  strokeWidth={1}
+                  strokeDasharray="3 2"
+                />
+              ) : null}
+
+              {/* Smoothed position (bright, path-constrained when on) */}
               {position?.smooth_position ? (
                 <Circle
                   cx={toSvgX(position.smooth_position.x)}
@@ -485,6 +543,13 @@ export default function FusionScreen() {
             <Text style={styles.legendText}>beacon</Text>
             <View
               style={[
+                styles.legendBar,
+                {backgroundColor: '#30363d', marginLeft: 12},
+              ]}
+            />
+            <Text style={styles.legendText}>walkable path</Text>
+            <View
+              style={[
                 styles.legendDot,
                 {backgroundColor: '#d29922', marginLeft: 12},
               ]}
@@ -496,7 +561,11 @@ export default function FusionScreen() {
                 {backgroundColor: '#3fb950', marginLeft: 12},
               ]}
             />
-            <Text style={styles.legendText}>smoothed (KF)</Text>
+            <Text style={styles.legendText}>
+              {position?.constrained_to_path
+                ? 'KF → path'
+                : 'smoothed (KF)'}
+            </Text>
           </View>
         </View>
       )}
@@ -668,8 +737,14 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#30363d',
   },
-  legendRow: {flexDirection: 'row', alignItems: 'center', marginTop: 8},
+  legendRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 8,
+    flexWrap: 'wrap',
+  },
   legendDot: {width: 10, height: 10, borderRadius: 5, marginRight: 4},
+  legendBar: {width: 16, height: 4, borderRadius: 2, marginRight: 4},
   legendText: {color: '#8b949e', fontSize: 11},
   topCellRow: {flexDirection: 'row', alignItems: 'center', marginBottom: 6},
   topCellRank: {
