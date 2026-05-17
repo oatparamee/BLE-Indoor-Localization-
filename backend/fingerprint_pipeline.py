@@ -120,10 +120,24 @@ class FingerprintPipeline:
             if not self._latest_rssi:
                 return None
 
+            known = self.store.known_beacons()
+            active = set(self._latest_rssi.keys())
+            overlap = active & known
+            # If no live beacon overlaps the fingerprint dimension every
+            # observation slot is None → floor-substituted → every cell
+            # gets the same sq_dist → top_cells freeze. Caller wants to
+            # know that explicitly so the UI can show why nothing moves.
+            if not overlap:
+                return {
+                    "_no_overlap": True,
+                    "active_beacons": sorted(active),
+                    "registered_beacons": sorted(known),
+                }
+
             # Include EVERY known beacon: silent ones get None and the
             # matcher floor-substitutes them. This keeps the measurement
             # dimension equal to the survey's beacon count.
-            observation = {bid: None for bid in self.store.known_beacons()}
+            observation = {bid: None for bid in known}
             for bid, rssi in self._latest_rssi.items():
                 observation[bid] = rssi
 
@@ -147,7 +161,8 @@ class FingerprintPipeline:
                     "vx": round(kf_state["vx"], 4),
                     "vy": round(kf_state["vy"], 4),
                 },
-                "active_beacons": sorted(self._latest_rssi.keys()),
+                "active_beacons": sorted(active),
+                "overlap_beacons": sorted(overlap),
                 "top_cells": result["top"],
                 "floor_rssi": result["floor_rssi"],
                 "timestamp": now,

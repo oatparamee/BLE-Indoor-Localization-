@@ -30,6 +30,8 @@ interface PositionResult {
   smooth_position?: {x: number; y: number};
   velocity?: {vx: number; vy: number};
   active_beacons?: string[];
+  overlap_beacons?: string[];
+  registered_beacons?: string[];
   top_cells?: TopCell[];
   floor_rssi?: number;
   initialized?: boolean;
@@ -45,6 +47,7 @@ interface REstimate {
 interface FpStatus {
   registered_beacons: string[];
   active_beacons: string[];
+  latest_rssi?: Record<string, number>;
   sigma_a: number;
   R: number[][];
   r_source: string;
@@ -72,6 +75,19 @@ export default function FusionScreen() {
   const flushIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const unsubRef = useRef<(() => void) | null>(null);
+  // Always-fresh beacon list for use inside the flush interval. Reading
+  // off React state from the interval closure would pin the value to
+  // whatever existed when startTracking() was called.
+  const beaconsRef = useRef<SavedBeacon[]>([]);
+  // Counters so the UI can show that BLE packets are actually flowing
+  // (or, more importantly, that they are not).
+  const [eventsSent, setEventsSent] = useState(0);
+  const [eventsSentTotal, setEventsSentTotal] = useState(0);
+  const eventsSinceLastTickRef = useRef(0);
+
+  useEffect(() => {
+    beaconsRef.current = beacons;
+  }, [beacons]);
 
   const stopAllIntervals = useCallback(() => {
     if (flushIntervalRef.current) {
@@ -101,7 +117,11 @@ export default function FusionScreen() {
   // tab show up here without an app restart.
   useFocusEffect(
     useCallback(() => {
-      loadBeaconConfig().then(cfg => setBeacons(Object.values(cfg)));
+      loadBeaconConfig().then(cfg => {
+        const list = Object.values(cfg);
+        setBeacons(list);
+        beaconsRef.current = list;
+      });
     }, []),
   );
 
@@ -114,25 +134,61 @@ export default function FusionScreen() {
       return;
     }
     try {
+      // Always pull a fresh beacon list right before tracking starts.
+      // Otherwise a freshly added/edited beacon in the Setup tab would
+      // not be available for the name→id translation below until the
+      // user switched tabs.
+      const cfg = await loadBeaconConfig();
+      const beaconList = Object.values(cfg);
+      setBeacons(beaconList);
+      beaconsRef.current = beaconList;
+
       const res = await api.fpStart({sigma_a, seed_r_from_loo: true});
       setREstimate(res?.r_estimate ?? null);
       bleScanner.drainRawEvents();
       setTrail([]);
       setPosition(null);
+      setEventsSent(0);
+      setEventsSentTotal(0);
+      eventsSinceLastTickRef.current = 0;
       setStatusMsg('Tracking — walk around.');
       setTracking(true);
 
       flushIntervalRef.current = setInterval(async () => {
         const events = bleScanner.drainRawEvents();
-        if (events.length === 0) return;
+        if (events.length === 0) {
+          setEventsSent(0);
+          return;
+        }
+        // Mirror SiteSurveyScreen: translate the advertised name to the
+        // registered beacon id so the backend's matcher recognises the
+        // observation. The backend route ALSO canonicalises (defence in
+        // depth) but doing it here keeps the wire format consistent and
+        // gives the user predictable behaviour offline-of-registry.
+        const byName = new Map(
+          beaconsRef.current.map(b => [b.name, b.id]),
+        );
         try {
           await api.fpRssiEvents(
-            events.map(e => ({beacon_id: e.beacon_id, rssi: e.rssi})),
+            events.map(e => ({
+              beacon_id: byName.get(e.beacon_name) ?? e.beacon_id,
+              beacon_name: e.beacon_name,
+              rssi: e.rssi,
+            })),
           );
-        } catch {}
+          setEventsSent(events.length);
+          eventsSinceLastTickRef.current += events.length;
+        } catch (err: any) {
+          setStatusMsg(`RSSI flush error: ${err?.message ?? err}`);
+        }
       }, RSSI_FLUSH_MS);
 
       pollIntervalRef.current = setInterval(async () => {
+        // Snapshot events/sec since the last poll tick so the UI can
+        // show whether packets are actually flowing.
+        const sinceLast = eventsSinceLastTickRef.current;
+        eventsSinceLastTickRef.current = 0;
+        setEventsSentTotal(prev => prev + sinceLast);
         try {
           const p = (await api.fpPositionLatest()) as PositionResult;
           setPosition(p);
@@ -144,7 +200,9 @@ export default function FusionScreen() {
           }
           const s = (await api.fpStatus()) as FpStatus;
           setFpStatus(s);
-        } catch {}
+        } catch (err: any) {
+          setStatusMsg(`position poll error: ${err?.message ?? err}`);
+        }
       }, POSITION_POLL_MS);
     } catch (e: any) {
       Alert.alert('Failed to start', e?.message ?? String(e));
@@ -289,7 +347,9 @@ export default function FusionScreen() {
               </Text>
             ) : null}
             <Text style={styles.statText}>
-              active beacons: {position.active_beacons?.length ?? 0}
+              active beacons: {position.active_beacons?.length ?? 0}  ·{' '}
+              overlap with fingerprint:{' '}
+              {position.overlap_beacons?.length ?? 0}
             </Text>
           </>
         ) : (
@@ -300,6 +360,61 @@ export default function FusionScreen() {
           </Text>
         )}
       </View>
+
+      {/* Live RSSI diagnostic — the matcher only updates when these
+          values change. If this panel is empty or stale, the BLE scan
+          is not reaching the backend and the green circle will freeze. */}
+      {tracking ? (
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Live RSSI</Text>
+          <Text style={styles.statText}>
+            packets last 250 ms: {eventsSent}  ·  total since start:{' '}
+            {eventsSentTotal}
+          </Text>
+          {fpStatus?.latest_rssi &&
+          Object.keys(fpStatus.latest_rssi).length > 0 ? (
+            (() => {
+              const knownSet = new Set(fpStatus.registered_beacons ?? []);
+              const nameById = new Map(
+                beaconsRef.current.map(b => [b.id, b.name]),
+              );
+              const rows = Object.entries(fpStatus.latest_rssi).sort(
+                (a, b) => b[1] - a[1],
+              );
+              return rows.map(([bid, rssi]) => {
+                const isKnown = knownSet.has(bid);
+                const label = nameById.get(bid) ?? bid;
+                return (
+                  <View key={bid} style={styles.rssiRow}>
+                    <Text
+                      style={[
+                        styles.rssiName,
+                        !isKnown && styles.rssiNameUnknown,
+                      ]}
+                      numberOfLines={1}>
+                      {isKnown ? '●' : '○'} {label}
+                    </Text>
+                    <Text style={styles.rssiValue}>{rssi.toFixed(1)} dBm</Text>
+                  </View>
+                );
+              });
+            })()
+          ) : (
+            <Text style={styles.statText}>
+              no live RSSI yet — make sure beacons are powered on and
+              advertising
+            </Text>
+          )}
+          {position?.active_beacons && position.active_beacons.length > 0 &&
+          (position.overlap_beacons?.length ?? 0) === 0 ? (
+            <Text style={styles.warningInline}>
+              Live ids do not match the fingerprint. Check that the
+              beacon registry on this phone is the same one used to
+              record the survey.
+            </Text>
+          ) : null}
+        </View>
+      ) : null}
 
       {/* Map */}
       {bbox && (
@@ -627,5 +742,37 @@ const styles = StyleSheet.create({
     marginTop: 6,
     fontStyle: 'italic',
     lineHeight: 16,
+  },
+  rssiRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 3,
+  },
+  rssiName: {
+    color: '#e6edf3',
+    fontSize: 12,
+    fontFamily: 'monospace',
+    flex: 1,
+    marginRight: 8,
+  },
+  rssiNameUnknown: {
+    color: '#d29922',
+  },
+  rssiValue: {
+    color: '#58a6ff',
+    fontSize: 12,
+    fontFamily: 'monospace',
+  },
+  warningInline: {
+    color: '#f85149',
+    fontSize: 12,
+    marginTop: 8,
+    lineHeight: 16,
+    backgroundColor: '#3a1313',
+    borderColor: '#5f2222',
+    borderWidth: 1,
+    borderRadius: 6,
+    padding: 8,
   },
 });

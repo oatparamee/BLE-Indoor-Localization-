@@ -166,6 +166,51 @@ def survey_start():
     return jsonify({"status": "survey started", **snap})
 
 
+def _canonicalize_events(events: list) -> list:
+    """Translate event `beacon_id` to the canonical id from `BeaconStore`.
+
+    BLE scanners report a `device.id` (MAC on Android, system UUID on
+    iOS) which can drift in case or across phone/Bluetooth-cache resets.
+    We accept that drift by also trusting the advertised name: if the
+    incoming event carries `beacon_name` (or `name`) AND that name maps
+    to a registered beacon, rewrite `beacon_id` to the registered id.
+    Also case-folds the BLE id and tries to match the registry's id
+    case-insensitively as a second fallback.
+
+    Returns a fresh list — never mutates `events` in place.
+    """
+    registry = beacon_store.as_dict()
+    by_name = {
+        str(entry.get("name")).strip(): str(entry.get("id"))
+        for entry in registry.values()
+        if entry.get("name") and entry.get("id")
+    }
+    by_upper_id = {
+        str(entry.get("id")).upper(): str(entry.get("id"))
+        for entry in registry.values()
+        if entry.get("id")
+    }
+
+    canonical = []
+    for event in events:
+        if not isinstance(event, dict):
+            canonical.append(event)
+            continue
+        beacon_name = event.get("beacon_name") or event.get("name")
+        beacon_id = event.get("beacon_id") or event.get("id")
+        # Prefer the name → canonical id mapping when it exists. Names
+        # are authoritative because the user typed them on the Setup
+        # tab and they survive cross-phone UUID drift on iOS.
+        canonical_id = by_name.get(str(beacon_name).strip()) if beacon_name else None
+        if canonical_id is None and beacon_id is not None:
+            canonical_id = by_upper_id.get(str(beacon_id).upper())
+        if canonical_id is not None:
+            canonical.append({**event, "beacon_id": canonical_id})
+        else:
+            canonical.append(event)
+    return canonical
+
+
 @app.route("/survey/events", methods=["POST"])
 def survey_events():
     """Append raw RSSI events to the active survey cell's buffer.
@@ -186,23 +231,7 @@ def survey_events():
     if not survey_collector.is_active(session_id):
         return jsonify({"error": "no active survey session — call /survey/start"}), 409
 
-    beacon_id_by_name = {
-        str(entry.get("name")): str(entry.get("id"))
-        for entry in beacon_store.as_dict().values()
-        if entry.get("name") and entry.get("id")
-    }
-    canonical_events = []
-    for event in events:
-        if not isinstance(event, dict):
-            canonical_events.append(event)
-            continue
-        beacon_name = event.get("beacon_name") or event.get("name")
-        canonical_id = beacon_id_by_name.get(str(beacon_name))
-        if canonical_id:
-            canonical_events.append({**event, "beacon_id": canonical_id})
-        else:
-            canonical_events.append(event)
-
+    canonical_events = _canonicalize_events(events)
     applied = survey_collector.ingest_events(canonical_events, session_id=session_id)
     snap = survey_collector.progress(session_id)
     return jsonify({"applied": applied, "received": len(events), **(snap or {})})
@@ -372,14 +401,23 @@ def fp_start():
 @app.route("/fp/rssi/events", methods=["POST"])
 def fp_rssi_events():
     """Stream raw RSSI events into the fingerprint pipeline's latest-value
-    cache. Same payload shape as /rssi/events."""
+    cache.
+
+    Body: same shape as /survey/events. Events whose `beacon_name`
+    matches a registered beacon get their `beacon_id` rewritten to the
+    canonical registry id; without this normalization the live id from
+    the BLE stack can drift from the id keying the fingerprint cells
+    (e.g. iOS UUID case / per-phone identifier) and the matcher would
+    silently floor-substitute every reading, freezing the position.
+    """
     data = request.get_json(force=True) or {}
     events = data.get("events")
     if events is None and "beacon_id" in data and "rssi" in data:
         events = [{"beacon_id": data["beacon_id"], "rssi": data["rssi"]}]
     if not isinstance(events, list):
         return jsonify({"error": "events list required"}), 400
-    applied = fp_pipeline.ingest_events(events)
+    canonical_events = _canonicalize_events(events)
+    applied = fp_pipeline.ingest_events(canonical_events)
     return jsonify({"applied": applied, "received": len(events)})
 
 
@@ -396,9 +434,26 @@ def fp_position_latest():
             "reason": (
                 "no active beacons yet"
                 if not active
-                else "fingerprint is empty or no overlap with active beacons"
+                else "fingerprint is empty"
             ),
             "active_beacons": active,
+        })
+    if result.get("_no_overlap"):
+        # We are seeing BLE packets, but the ids do not match any beacon
+        # stored in the fingerprint. This typically means the BLE ids
+        # drifted from the registry (case difference, iOS per-phone
+        # UUID cache reset, surveyed on a different phone). The
+        # /fp/rssi/events route already canonicalizes via beacon_name;
+        # if that did not help, the frontend probably did not include
+        # `beacon_name` or the beacon registry is missing entries.
+        return jsonify({
+            "ready": False,
+            "reason": (
+                "BLE ids do not match the fingerprint — "
+                "active beacons are not in the surveyed set"
+            ),
+            "active_beacons": result["active_beacons"],
+            "registered_beacons": result["registered_beacons"],
         })
     return jsonify({"ready": True, **result})
 
