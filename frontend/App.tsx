@@ -4,12 +4,9 @@ import {createBottomTabNavigator} from '@react-navigation/bottom-tabs';
 import {StatusBar, View, Text, StyleSheet, ActivityIndicator} from 'react-native';
 import {loadApiUrl} from './src/config/api';
 
-import CalibrationScreen from './src/screens/CalibrationScreen';
-import RSSIProfileScreen from './src/screens/RSSIProfileScreen';
-import LiveReadingsScreen from './src/screens/LiveReadingsScreen';
 import SetupScreen from './src/screens/SetupScreen';
 import SiteSurveyScreen from './src/screens/SiteSurveyScreen';
-import PositionScreen from './src/screens/PositionScreen';
+import FusionScreen from './src/screens/FusionScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
 import BoelterNavigationScreen from './src/screens/BoelterNavigationScreen';
 
@@ -17,12 +14,9 @@ const Tab = createBottomTabNavigator();
 
 function TabIcon({label, focused}: {label: string; focused: boolean}) {
   const icons: Record<string, string> = {
-    Calibration: '⚙',
-    Profile: '📊',
-    Readings: '📡',
     Beacons: '📌',
     Survey: '🗺',
-    Position: '📍',
+    Fusion: '🎯',
     Navigation: '🧭',
     Settings: '🔧',
   };
@@ -79,35 +73,6 @@ export default function App() {
           tabBarInactiveTintColor: '#8b949e',
         }}>
         <Tab.Screen
-          name="Calibration"
-          component={CalibrationScreen}
-          options={{
-            tabBarIcon: ({focused}) => (
-              <TabIcon label="Calibration" focused={focused} />
-            ),
-          }}
-        />
-        <Tab.Screen
-          name="Profile"
-          component={RSSIProfileScreen}
-          options={{
-            title: 'RSSI Profile',
-            tabBarIcon: ({focused}) => (
-              <TabIcon label="Profile" focused={focused} />
-            ),
-          }}
-        />
-        <Tab.Screen
-          name="Readings"
-          component={LiveReadingsScreen}
-          options={{
-            title: 'Live Readings',
-            tabBarIcon: ({focused}) => (
-              <TabIcon label="Readings" focused={focused} />
-            ),
-          }}
-        />
-        <Tab.Screen
           name="Beacons"
           component={SetupScreen}
           options={{
@@ -128,11 +93,12 @@ export default function App() {
           }}
         />
         <Tab.Screen
-          name="Position"
-          component={PositionScreen}
+          name="Fusion"
+          component={FusionScreen}
           options={{
+            title: 'Sensor Fusion',
             tabBarIcon: ({focused}) => (
-              <TabIcon label="Position" focused={focused} />
+              <TabIcon label="Fusion" focused={focused} />
             ),
           }}
         />
