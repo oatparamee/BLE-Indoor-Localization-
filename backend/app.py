@@ -438,11 +438,8 @@ def fp_start():
 
     Body (all optional):
         {
-            "sigma_a": 0.5,          // process-noise std for 4D KF (m/s^2)
-            "smoothing_window": 15,  // # advertisements averaged/beacon
-            "max_speed": 3.0,        // velocity-gate cap (m/s); 0 = off
-            "gate_margin": 2.0,      // velocity-gate slack (m)
-            "seed_r_from_loo": true  // run LOO cross-val and apply R
+            "sigma_a": 0.5,        // process-noise std for 4D KF (m/s^2)
+            "seed_r_from_loo": true // run LOO cross-val and apply R
         }
 
     Returns the LOO estimator output (R, RMSE, per-cell residuals) so the
@@ -451,20 +448,11 @@ def fp_start():
     """
     data = request.get_json(silent=True) or {}
     sigma_a = data.get("sigma_a")
-    smoothing_window = data.get("smoothing_window")
-    max_speed = data.get("max_speed")
-    gate_margin = data.get("gate_margin")
-    try:
-        sa = float(sigma_a) if sigma_a is not None else None
-        sw = int(smoothing_window) if smoothing_window is not None else None
-        ms = float(max_speed) if max_speed is not None else None
-        gm = float(gate_margin) if gate_margin is not None else None
-    except (TypeError, ValueError):
-        return jsonify({"error": "sigma_a/max_speed/gate_margin must be numeric, smoothing_window an integer"}), 400
-    if sa is not None or sw is not None or ms is not None or gm is not None:
-        fp_pipeline.set_params(
-            sigma_a=sa, smoothing_window=sw, max_speed=ms, gate_margin=gm,
-        )
+    if sigma_a is not None:
+        try:
+            fp_pipeline.set_params(sigma_a=float(sigma_a))
+        except (TypeError, ValueError):
+            return jsonify({"error": "sigma_a must be numeric"}), 400
 
     fp_pipeline.reset()
 
@@ -570,33 +558,24 @@ def fp_status():
 
 @app.route("/fp/params", methods=["POST"])
 def fp_params():
-    """Live-tune the pipeline.
+    """Manually set sigma_a and/or R.
 
-    Body (all fields optional):
+    Body:
         {
-            "sigma_a": 0.7,              // 4D KF process-noise std (m/s^2)
-            "R": [[0.25, 0], [0, 0.36]], // 2x2 measurement noise
-            "smoothing_window": 15,      // # advertisements averaged/beacon
-            "max_speed": 3.0,            // velocity-gate cap (m/s); 0 = off
-            "gate_margin": 2.0           // velocity-gate slack (m)
+            "sigma_a": 0.7,
+            "R": [[0.25, 0.0], [0.0, 0.36]]   // 2x2 measurement noise
         }
 
-    Passing `R` switches r_source to "manual" and overrides any
-    LOO-derived value.
+    Either field is optional. Passing `R` switches r_source to "manual"
+    and overrides any LOO-derived value.
     """
     data = request.get_json(force=True) or {}
     sigma_a = data.get("sigma_a")
     r = data.get("R")
-    smoothing_window = data.get("smoothing_window")
-    max_speed = data.get("max_speed")
-    gate_margin = data.get("gate_margin")
     try:
         sa = float(sigma_a) if sigma_a is not None else None
-        sw = int(smoothing_window) if smoothing_window is not None else None
-        ms = float(max_speed) if max_speed is not None else None
-        gm = float(gate_margin) if gate_margin is not None else None
     except (TypeError, ValueError):
-        return jsonify({"error": "sigma_a/max_speed/gate_margin must be numeric, smoothing_window an integer"}), 400
+        return jsonify({"error": "sigma_a must be numeric"}), 400
 
     if r is not None:
         try:
@@ -607,10 +586,7 @@ def fp_params():
     else:
         r_np = None
 
-    fp_pipeline.set_params(
-        sigma_a=sa, r=r_np, smoothing_window=sw,
-        max_speed=ms, gate_margin=gm,
-    )
+    fp_pipeline.set_params(sigma_a=sa, r=r_np)
     return jsonify({"status": "updated", **fp_pipeline.get_status()})
 
 

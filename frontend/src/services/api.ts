@@ -149,18 +149,9 @@ export const api = {
   // ── Fingerprint live pipeline (raw RSSI -> match -> 4D KF) ────────
 
   /** Start the fingerprint pipeline. Optionally re-seed R from LOO cross-val. */
-  fpStart: (opts?: {
-    sigma_a?: number;
-    smoothing_window?: number;
-    max_speed?: number;
-    gate_margin?: number;
-    seed_r_from_loo?: boolean;
-  }) =>
+  fpStart: (opts?: {sigma_a?: number; seed_r_from_loo?: boolean}) =>
     post('/fp/start', {
       sigma_a: opts?.sigma_a,
-      smoothing_window: opts?.smoothing_window,
-      max_speed: opts?.max_speed,
-      gate_margin: opts?.gate_margin,
       seed_r_from_loo: opts?.seed_r_from_loo ?? true,
     }),
 
@@ -177,14 +168,9 @@ export const api = {
   /** Diagnostic snapshot of the live pipeline (sigma_a, R, r_source, etc.). */
   fpStatus: () => get('/fp/status'),
 
-  /** Live-tune sigma_a (Q), R (2x2), RSSI smoothing window, and velocity gate. */
-  fpParams: (params: {
-    sigma_a?: number;
-    R?: number[][];
-    smoothing_window?: number;
-    max_speed?: number;
-    gate_margin?: number;
-  }) => post('/fp/params', params),
+  /** Live-tune sigma_a (Q) and/or R (2x2). */
+  fpParams: (params: {sigma_a?: number; R?: number[][]}) =>
+    post('/fp/params', params),
 
   /** Run LOO cross-val WITHOUT applying the result. For inspection. */
   fpREstimate: () => get('/fp/r/estimate'),

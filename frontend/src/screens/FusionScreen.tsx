@@ -38,9 +38,6 @@ interface PositionResult {
   top_cells?: TopCell[];
   floor_rssi?: number;
   initialized?: boolean;
-  /** True when the velocity gate rejected this match as an implausible
-   *  jump — the KF coasted on its prediction instead. */
-  gated?: boolean;
 }
 
 interface PathSegment {
@@ -61,14 +58,9 @@ interface FpStatus {
   registered_beacons: string[];
   active_beacons: string[];
   latest_rssi?: Record<string, number>;
-  smoothed_rssi?: Record<string, number>;
-  smoothing_window?: number;
   sigma_a: number;
   R: number[][];
   r_source: string;
-  max_speed?: number;
-  gate_margin?: number;
-  last_gated?: boolean;
   initialized: boolean;
   fingerprint_summary: {
     cell_count: number;
@@ -89,8 +81,6 @@ export default function FusionScreen() {
   const [statusMsg, setStatusMsg] = useState('');
   const [trail, setTrail] = useState<Array<{x: number; y: number}>>([]);
   const [sigmaAInput, setSigmaAInput] = useState('0.5');
-  const [smoothingInput, setSmoothingInput] = useState('15');
-  const [maxSpeedInput, setMaxSpeedInput] = useState('3.0');
   const [pathSegments, setPathSegments] = useState<PathSegment[]>([]);
   // Map zoom in px-per-meter. 12 was the previous hard-coded scale; we
   // keep it as the default so the map opens the same as before. The
@@ -181,16 +171,6 @@ export default function FusionScreen() {
       Alert.alert('Invalid sigma_a', 'Must be a positive number (m/s²).');
       return;
     }
-    const smoothing_window = parseInt(smoothingInput, 10);
-    if (!Number.isFinite(smoothing_window) || smoothing_window < 1) {
-      Alert.alert('Invalid smoothing window', 'Must be a positive integer.');
-      return;
-    }
-    const max_speed = parseFloat(maxSpeedInput);
-    if (!Number.isFinite(max_speed) || max_speed < 0) {
-      Alert.alert('Invalid max speed', 'Must be 0 or greater (0 disables the gate).');
-      return;
-    }
     try {
       // Always pull a fresh beacon list right before tracking starts.
       // Otherwise a freshly added/edited beacon in the Setup tab would
@@ -201,12 +181,7 @@ export default function FusionScreen() {
       setBeacons(beaconList);
       beaconsRef.current = beaconList;
 
-      const res = await api.fpStart({
-        sigma_a,
-        smoothing_window,
-        max_speed,
-        seed_r_from_loo: true,
-      });
+      const res = await api.fpStart({sigma_a, seed_r_from_loo: true});
       setREstimate(res?.r_estimate ?? null);
       bleScanner.drainRawEvents();
       setTrail([]);
@@ -346,31 +321,6 @@ export default function FusionScreen() {
       await api.fpParams({sigma_a});
       setStatusMsg(`sigma_a set to ${sigma_a}.`);
       // Refresh status so the displayed value is authoritative
-      try {
-        const s = (await api.fpStatus()) as FpStatus;
-        setFpStatus(s);
-      } catch {}
-    } catch (e: any) {
-      Alert.alert('Apply failed', e?.message ?? String(e));
-    }
-  };
-
-  const applyRobustness = async () => {
-    const smoothing_window = parseInt(smoothingInput, 10);
-    if (!Number.isFinite(smoothing_window) || smoothing_window < 1) {
-      Alert.alert('Invalid smoothing window', 'Must be a positive integer.');
-      return;
-    }
-    const max_speed = parseFloat(maxSpeedInput);
-    if (!Number.isFinite(max_speed) || max_speed < 0) {
-      Alert.alert('Invalid max speed', 'Must be 0 or greater (0 disables the gate).');
-      return;
-    }
-    try {
-      await api.fpParams({smoothing_window, max_speed});
-      setStatusMsg(
-        `smoothing=${smoothing_window} samples, max speed=${max_speed} m/s.`,
-      );
       try {
         const s = (await api.fpStatus()) as FpStatus;
         setFpStatus(s);
@@ -943,67 +893,6 @@ export default function FusionScreen() {
         </Text>
       </View>
 
-      {/* Robustness tuning — RSSI smoothing + velocity gate */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Robustness tuning</Text>
-
-        <Text style={styles.fieldLabel}>
-          RSSI smoothing window (advertisements averaged per beacon)
-        </Text>
-        <TextInput
-          style={styles.input}
-          value={smoothingInput}
-          onChangeText={setSmoothingInput}
-          keyboardType="number-pad"
-          placeholder="15"
-          placeholderTextColor="#6e7681"
-        />
-        <Text style={styles.hint}>
-          Averages the last N raw readings per beacon before matching, so
-          the live vector is comparable to the 100-sample survey means.
-          Higher = steadier match, more lag.
-          {fpStatus?.smoothing_window !== undefined
-            ? `  Current: ${fpStatus.smoothing_window}`
-            : ''}
-        </Text>
-
-        <Text style={[styles.fieldLabel, {marginTop: 10}]}>
-          Max speed (m/s) — velocity gate; 0 disables
-        </Text>
-        <View style={styles.coordsRow}>
-          <View style={{flex: 1}}>
-            <TextInput
-              style={styles.input}
-              value={maxSpeedInput}
-              onChangeText={setMaxSpeedInput}
-              keyboardType="default"
-              placeholder="3.0"
-              placeholderTextColor="#6e7681"
-            />
-          </View>
-          <View style={{width: 8}} />
-          <TouchableOpacity
-            style={[styles.applyButton, !tracking && styles.buttonDisabled]}
-            onPress={applyRobustness}
-            disabled={!tracking}>
-            <Text style={styles.applyButtonText}>Apply</Text>
-          </TouchableOpacity>
-        </View>
-        <Text style={styles.hint}>
-          A match that implies moving faster than this is rejected as an
-          outlier — the KF coasts on its prediction. Kills 10 m teleport
-          jumps.
-          {fpStatus?.max_speed !== undefined
-            ? `  Current: ${fpStatus.max_speed.toFixed(1)} m/s`
-            : ''}
-        </Text>
-        {position?.gated ? (
-          <Text style={styles.gatedBadge}>
-            ⚠ last match rejected by velocity gate (coasting)
-          </Text>
-        ) : null}
-      </View>
-
       {/* Status footer */}
       {fpStatus ? (
         <View style={styles.section}>
@@ -1226,12 +1115,6 @@ const styles = StyleSheet.create({
     marginTop: 6,
     fontStyle: 'italic',
     lineHeight: 16,
-  },
-  gatedBadge: {
-    color: '#d29922',
-    fontSize: 12,
-    fontWeight: '600',
-    marginTop: 8,
   },
   rssiRow: {
     flexDirection: 'row',

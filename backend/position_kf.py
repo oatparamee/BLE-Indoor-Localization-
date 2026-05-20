@@ -25,21 +25,6 @@ smaller sigma_a makes it trust the motion model (smoother, laggier).
 The measurement noise R is a 2x2 matrix supplied by the caller. Seed it
 from `r_estimator.estimate_r_loo()` once the survey is collected, or set
 it manually via `set_r()`.
-
-Innovation (velocity) gating
-----------------------------
-A fingerprint match can occasionally alias to a cell metres away from
-the truth. Such a measurement would imply the pedestrian teleported.
-Before applying a measurement, the filter checks the innovation
-magnitude ||z - Hx̂|| against a gate:
-
-    gate = max_speed * dt + gate_margin
-
-If the jump exceeds the gate the measurement is REJECTED — the filter
-coasts on its constant-velocity prediction for that step. To avoid
-getting permanently stuck if the estimate itself is wrong, after
-`_MAX_CONSECUTIVE_REJECTS` rejections in a row the next measurement is
-force-accepted so the filter can re-converge.
 """
 
 import time
@@ -52,23 +37,9 @@ import numpy as np
 DT_MIN = 1e-3
 DT_MAX = 5.0
 
-# After this many consecutive gated measurements, accept the next one
-# regardless — otherwise a genuinely wrong estimate could never recover.
-_MAX_CONSECUTIVE_REJECTS = 8
-
-# Gating defaults.
-DEFAULT_MAX_SPEED = 3.0     # m/s — brisk indoor walk
-DEFAULT_GATE_MARGIN = 2.0   # m   — slack for match noise on top of motion
-
 
 class PositionKalmanFilter4D:
-    def __init__(
-        self,
-        sigma_a: float = 0.5,
-        r=None,
-        max_speed: float = DEFAULT_MAX_SPEED,
-        gate_margin: float = DEFAULT_GATE_MARGIN,
-    ):
+    def __init__(self, sigma_a: float = 0.5, r=None):
         self.sigma_a = float(sigma_a)
         self.x = np.zeros((4, 1))
         self.P = np.eye(4) * 1e3
@@ -76,13 +47,6 @@ class PositionKalmanFilter4D:
         self.H[0, 0] = 1.0
         self.H[1, 1] = 1.0
         self.R = np.eye(2) if r is None else np.array(r, dtype=float)
-
-        # Gating. max_speed <= 0 disables it.
-        self.max_speed = float(max_speed)
-        self.gate_margin = float(gate_margin)
-        self._consecutive_rejects = 0
-        self._last_gated = False
-
         self._last_time: Optional[float] = None
         self._initialized = False
 
@@ -93,18 +57,6 @@ class PositionKalmanFilter4D:
 
     def set_r(self, r) -> None:
         self.R = np.array(r, dtype=float)
-
-    def set_gate(
-        self,
-        max_speed: Optional[float] = None,
-        gate_margin: Optional[float] = None,
-    ) -> None:
-        """Tune the velocity gate. Set max_speed to 0 (or negative) to
-        disable gating entirely."""
-        if max_speed is not None:
-            self.max_speed = float(max_speed)
-        if gate_margin is not None:
-            self.gate_margin = float(gate_margin)
 
     # ── Step ───────────────────────────────────────────────────────
 
@@ -120,7 +72,6 @@ class PositionKalmanFilter4D:
             self.x[3, 0] = 0.0
             self._last_time = t
             self._initialized = True
-            self._last_gated = False
             return self.state()
 
         dt = float(t - (self._last_time or t))
@@ -145,23 +96,8 @@ class PositionKalmanFilter4D:
         self.x = F @ self.x
         self.P = F @ self.P @ F.T + Q
 
-        # Innovation
-        innovation = z - self.H @ self.x
-
-        # ── Velocity gate ──────────────────────────────────────────
-        # Reject a measurement that implies moving faster than a human.
-        if self.max_speed > 0.0:
-            jump = float(np.hypot(innovation[0, 0], innovation[1, 0]))
-            gate = self.max_speed * dt + self.gate_margin
-            if jump > gate and self._consecutive_rejects < _MAX_CONSECUTIVE_REJECTS:
-                # Outlier — coast on the constant-velocity prediction.
-                self._consecutive_rejects += 1
-                self._last_gated = True
-                return self.state()
-            self._consecutive_rejects = 0
-        self._last_gated = False
-
         # Update
+        innovation = z - self.H @ self.x
         S = self.H @ self.P @ self.H.T + self.R
         try:
             K = self.P @ self.H.T @ np.linalg.inv(S)
@@ -185,18 +121,11 @@ class PositionKalmanFilter4D:
             "vy": float(self.x[3, 0]),
         }
 
-    @property
-    def last_gated(self) -> bool:
-        """True if the most recent update() rejected its measurement."""
-        return self._last_gated
-
     def reset(self) -> None:
         self.x = np.zeros((4, 1))
         self.P = np.eye(4) * 1e3
         self._last_time = None
         self._initialized = False
-        self._consecutive_rejects = 0
-        self._last_gated = False
 
     @property
     def initialized(self) -> bool:
@@ -209,8 +138,4 @@ class PositionKalmanFilter4D:
             "P": self.P.tolist(),
             "state": self.state(),
             "initialized": self._initialized,
-            "max_speed": self.max_speed,
-            "gate_margin": self.gate_margin,
-            "last_gated": self._last_gated,
-            "consecutive_rejects": self._consecutive_rejects,
         }
