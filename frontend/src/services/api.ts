@@ -50,6 +50,13 @@ export interface RssiEvent {
   beacon_id: string;
   beacon_name?: string;
   rssi: number;
+  /** Optional hardware identifiers parsed from the iBeacon
+   *  advertisement. The backend uses these (when present) to
+   *  canonicalise to a configured beacon, even if the device.id /
+   *  advertised name don't match the registry. */
+  ibeacon_uuid?: string | null;
+  ibeacon_major?: number | null;
+  ibeacon_minor?: number | null;
 }
 
 export interface PersistedBeacon {
@@ -59,6 +66,12 @@ export interface PersistedBeacon {
   y: number;
   q?: number;
   r?: number;
+  /** Apple iBeacon proximity UUID (configured in KBeaconPro). */
+  uuid?: string;
+  /** iBeacon Major (0-65535). */
+  major?: number;
+  /** iBeacon Minor (0-65535). */
+  minor?: number;
 }
 
 export const api = {

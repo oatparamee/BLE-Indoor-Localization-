@@ -28,14 +28,85 @@ interface RssiKalmanSettings {
 }
 
 // Known beacon advertising MACs → friendly name.
-// Android only: iOS gets the name from Core Bluetooth's GATT cache.
-// To identify a beacon's advertising MAC: hold the phone touching the beacon,
-// run logcat, find the device with the strongest RSSI (closest to -30).
+// Android-only fallback for non-iBeacon devices (kept for backwards
+// compatibility with the original Beacon_A setup). The preferred
+// matching path now is iBeacon UUID/major/minor — see parseIBeacon
+// below — which works the same on iOS and Android.
 const BEACON_NAME_MAP: Record<string, string> = {
   '33:06:C5:58:E9:53': 'Beacon_A',
   // '??:??:??:??:??:??': 'Beacon_B',
   // '??:??:??:??:??:??': 'Beacon_C',
 };
+
+/**
+ * Parsed iBeacon (Apple 0x004C, subtype 0x02/0x15) advertisement
+ * fields. These are hardware-side identifiers configured via the
+ * KBeaconPro app and are STABLE across phones — unlike the iOS
+ * CoreBluetooth peripheral UUID exposed as `device.id`.
+ */
+export interface IBeaconInfo {
+  /** Proximity UUID, upper-case canonical 8-4-4-4-12 form. */
+  uuid: string;
+  /** Major identifier (0-65535). */
+  major: number;
+  /** Minor identifier (0-65535). */
+  minor: number;
+  /** Measured RSSI at 1 m, signed 8-bit. Useful as a free TX-power. */
+  txPower: number;
+}
+
+/**
+ * Decode an iBeacon advertisement out of `device.manufacturerData`.
+ *
+ * manufacturerData layout we expect (25 bytes):
+ *   00–01  Company ID — Apple (LE): 0x4C 0x00
+ *   02     iBeacon sub-type        : 0x02
+ *   03     iBeacon length          : 0x15 (21 bytes follow)
+ *   04–19  Proximity UUID (big-endian, 16 bytes)
+ *   20–21  Major (big-endian, 2 bytes)
+ *   22–23  Minor (big-endian, 2 bytes)
+ *   24     Measured Power at 1 m (signed int8)
+ *
+ * Returns null if the input is empty, malformed, or not an Apple
+ * iBeacon. We tolerate longer payloads (some firmwares pad), but the
+ * first 25 bytes must conform.
+ */
+export function parseIBeacon(
+  manufacturerDataBase64: string | null | undefined,
+): IBeaconInfo | null {
+  if (!manufacturerDataBase64) return null;
+  let bytes: Uint8Array;
+  try {
+    const binary = globalThis.atob
+      ? globalThis.atob(manufacturerDataBase64)
+      : '';
+    if (!binary) return null;
+    bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+  } catch {
+    return null;
+  }
+  if (bytes.length < 25) return null;
+  // Apple company id, little-endian.
+  if (bytes[0] !== 0x4c || bytes[1] !== 0x00) return null;
+  // iBeacon sub-type + length.
+  if (bytes[2] !== 0x02 || bytes[3] !== 0x15) return null;
+
+  const hex = Array.from(bytes.slice(4, 20))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('')
+    .toUpperCase();
+  const uuid =
+    `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-` +
+    `${hex.slice(16, 20)}-${hex.slice(20)}`;
+  const major = ((bytes[20] << 8) | bytes[21]) & 0xffff;
+  const minor = ((bytes[22] << 8) | bytes[23]) & 0xffff;
+  const rawPwr = bytes[24];
+  const txPower = rawPwr > 127 ? rawPwr - 256 : rawPwr;
+  return {uuid, major, minor, txPower};
+}
 
 export interface BeaconReading {
   /** Stable BLE device identifier (MAC on Android, system UUID on iOS). */
@@ -50,6 +121,9 @@ export interface BeaconReading {
   kalmanQ: number;
   kalmanR: number;
   kalmanSource: RssiKalmanSettings['source'];
+  /** iBeacon UUID/major/minor parsed from manufacturerData. Null if
+   *  the device is not advertising in Apple iBeacon format. */
+  ibeacon: IBeaconInfo | null;
 }
 
 /**
@@ -62,6 +136,11 @@ export interface RawRssiEvent {
   beacon_name: string;
   rssi: number;
   timestamp: number;
+  /** iBeacon proximity UUID (upper-case). Null if the advertisement
+   *  was not an Apple iBeacon. */
+  ibeacon_uuid?: string | null;
+  ibeacon_major?: number | null;
+  ibeacon_minor?: number | null;
 }
 
 class RssiKalmanFilter {
@@ -195,6 +274,7 @@ class BLEScanner {
         kalmanQ: RSSI_KF_Q,
         kalmanR: RSSI_KF_R,
         kalmanSource: 'default',
+        ibeacon: null,
       };
     } else if (name && this.readings[id].name !== name) {
       this.readings[id].name = name;
@@ -352,20 +432,31 @@ class BLEScanner {
         const upperID = device.id.toUpperCase();
         const rawName = device.name || device.localName;
         const trimmed = rawName?.trim();
+        const ibeacon = parseIBeacon(device.manufacturerData);
 
-        // Android: match only MACs listed in BEACON_NAME_MAP (names not in advertisement).
-        // iOS: match by advertised name — Core Bluetooth caches it from GATT.
-        const isBlueCharm =
-          Platform.OS === 'android'
-            ? upperID in BEACON_NAME_MAP
-            : !!trimmed && trimmed.toLowerCase().startsWith('bcpro');
-
-        if (!isBlueCharm) return;
+        // We forward a device when ANY of these is true:
+        //   1. It advertises in Apple iBeacon format (preferred — UUID
+        //      / major / minor is stable across phones and survives
+        //      a name change in KBeaconPro).
+        //   2. The advertised name starts with "bcpro" (legacy iOS
+        //      fallback for beacons that aren't in iBeacon mode).
+        //   3. The MAC is in BEACON_NAME_MAP (legacy Android shortcut).
+        // Consumers can still narrow this down to "only configured
+        // beacons" using the registered uuid/major/minor or name.
+        const looksLikeBcPro =
+          !!trimmed && trimmed.toLowerCase().startsWith('bcpro');
+        const legacyAndroidMatch =
+          Platform.OS === 'android' && upperID in BEACON_NAME_MAP;
+        if (!ibeacon && !looksLikeBcPro && !legacyAndroidMatch) return;
 
         const displayName =
-          BEACON_NAME_MAP[upperID] ?? trimmed ?? `BCPro-${device.id.slice(-5)}`;
+          BEACON_NAME_MAP[upperID] ??
+          trimmed ??
+          (ibeacon
+            ? `BCPro-${ibeacon.major}.${ibeacon.minor}`
+            : `BCPro-${device.id.slice(-5)}`);
 
-        this._updateBeaconReading(device.id, displayName, device.rssi);
+        this._updateBeaconReading(device.id, displayName, device.rssi, ibeacon);
       },
     );
 
@@ -399,7 +490,12 @@ class BLEScanner {
     }
   }
 
-  private _updateBeaconReading(id: string, name: string, rssi: number) {
+  private _updateBeaconReading(
+    id: string,
+    name: string,
+    rssi: number,
+    ibeacon: IBeaconInfo | null,
+  ) {
     const beacon = this._getOrCreateReading(id, name);
     const settings = this._getKalmanSettings(id);
     beacon.rawRssi = rssi;
@@ -408,6 +504,7 @@ class BLEScanner {
     beacon.kalmanQ = settings.q;
     beacon.kalmanR = settings.r;
     beacon.kalmanSource = settings.source;
+    if (ibeacon) beacon.ibeacon = ibeacon;
 
     if (!this.rssiFilters[id]) {
       this.rssiFilters[id] = new RssiKalmanFilter(settings.q, settings.r);
@@ -426,6 +523,9 @@ class BLEScanner {
       beacon_name: name,
       rssi,
       timestamp: Date.now(),
+      ibeacon_uuid: ibeacon ? ibeacon.uuid : null,
+      ibeacon_major: ibeacon ? ibeacon.major : null,
+      ibeacon_minor: ibeacon ? ibeacon.minor : null,
     });
     if (this.rawEventBuffer.length > BLEScanner.RAW_BUFFER_MAX) {
       this.rawEventBuffer.splice(
