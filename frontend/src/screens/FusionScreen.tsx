@@ -15,15 +15,6 @@ import {bleScanner} from '../services/bleScanner';
 import {api} from '../services/api';
 import {loadBeaconConfig, SavedBeacon} from '../config/beaconConfig';
 
-interface TopCell {
-  x: number;
-  y: number;
-  distance: number;
-  sq_dist: number;
-  weight: number;
-  n_beacons: number;
-}
-
 interface PositionResult {
   ready: boolean;
   reason?: string;
@@ -33,10 +24,7 @@ interface PositionResult {
   constrained_to_path?: boolean;
   velocity?: {vx: number; vy: number};
   active_beacons?: string[];
-  overlap_beacons?: string[];
-  registered_beacons?: string[];
-  top_cells?: TopCell[];
-  floor_rssi?: number;
+  anchor_count?: number;
   initialized?: boolean;
 }
 
@@ -56,25 +44,14 @@ interface RouteResult {
   reason?: string;
 }
 
-interface REstimate {
-  R: number[][];
-  rmse: number;
-  n_samples: number;
-  mean_residual: {x: number; y: number};
-}
-
 interface FpStatus {
   registered_beacons: string[];
   active_beacons: string[];
   latest_rssi?: Record<string, number>;
   sigma_a: number;
   R: number[][];
-  r_source: string;
+  smoothing_window?: number;
   initialized: boolean;
-  fingerprint_summary: {
-    cell_count: number;
-    floor_rssi: number | null;
-  };
 }
 
 const TRAIL_MAX = 30;
@@ -128,7 +105,6 @@ export default function FusionScreen() {
   const [tracking, setTracking] = useState(false);
   const [position, setPosition] = useState<PositionResult | null>(null);
   const [fpStatus, setFpStatus] = useState<FpStatus | null>(null);
-  const [rEstimate, setREstimate] = useState<REstimate | null>(null);
   const [statusMsg, setStatusMsg] = useState('');
   const [trail, setTrail] = useState<Array<{x: number; y: number}>>([]);
   const [sigmaAInput, setSigmaAInput] = useState('0.5');
@@ -236,8 +212,7 @@ export default function FusionScreen() {
       setBeacons(beaconList);
       beaconsRef.current = beaconList;
 
-      const res = await api.fpStart({sigma_a, seed_r_from_loo: true});
-      setREstimate(res?.r_estimate ?? null);
+      await api.fpStart({sigma_a});
       bleScanner.drainRawEvents();
       setTrail([]);
       setPosition(null);
@@ -352,18 +327,6 @@ export default function FusionScreen() {
     try {
       await api.fpReset();
     } catch {}
-  };
-
-  const reseedR = async () => {
-    try {
-      const res = await api.fpStart({seed_r_from_loo: true});
-      setREstimate(res?.r_estimate ?? null);
-      setStatusMsg('R re-seeded from LOO.');
-      setTrail([]);
-      setPosition(null);
-    } catch (e: any) {
-      Alert.alert('Re-seed failed', e?.message ?? String(e));
-    }
   };
 
   const applySigmaA = async () => {
@@ -620,11 +583,11 @@ export default function FusionScreen() {
 
   return (
     <ScrollView style={styles.container}>
-      <Text style={styles.title}>Sensor Fusion</Text>
+      <Text style={styles.title}>Live Tracking</Text>
       <Text style={styles.subtitle}>
-        Raw RSSI → Gaussian fingerprint match → 4D Kalman filter on{' '}
-        [x, y, vx, vy]. R comes from LOO cross-val on the survey; Q
-        from sigma_a × dt.
+        Raw RSSI → path-loss distance → trilateration → 4D Kalman filter
+        on [x, y, vx, vy]. Works at any site once beacon coordinates are
+        entered — no survey.
       </Text>
 
       {/* Start / Stop */}
@@ -635,11 +598,6 @@ export default function FusionScreen() {
           </TouchableOpacity>
         ) : (
           <View style={styles.buttonRow}>
-            <TouchableOpacity
-              style={styles.secondaryButton}
-              onPress={reseedR}>
-              <Text style={styles.secondaryButtonText}>Re-seed R</Text>
-            </TouchableOpacity>
             <TouchableOpacity
               style={styles.destructiveButton}
               onPress={stopTracking}>
@@ -673,9 +631,10 @@ export default function FusionScreen() {
               </Text>
             ) : null}
             <Text style={styles.statText}>
-              active beacons: {position.active_beacons?.length ?? 0}  ·{' '}
-              overlap with fingerprint:{' '}
-              {position.overlap_beacons?.length ?? 0}
+              active beacons: {position.active_beacons?.length ?? 0}
+              {position.anchor_count !== undefined
+                ? `  ·  anchors used: ${position.anchor_count}`
+                : ''}
             </Text>
           </>
         ) : (
@@ -731,14 +690,6 @@ export default function FusionScreen() {
               advertising
             </Text>
           )}
-          {position?.active_beacons && position.active_beacons.length > 0 &&
-          (position.overlap_beacons?.length ?? 0) === 0 ? (
-            <Text style={styles.warningInline}>
-              Live ids do not match the fingerprint. Check that the
-              beacon registry on this phone is the same one used to
-              record the survey.
-            </Text>
-          ) : null}
         </View>
       ) : null}
 
@@ -1049,52 +1000,18 @@ export default function FusionScreen() {
         </View>
       )}
 
-      {/* Top cells (transparency into the matcher) */}
-      {position?.top_cells && position.top_cells.length > 0 ? (
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Top matching cells</Text>
-          {position.top_cells.map((c, i) => (
-            <View key={`${c.x},${c.y}`} style={styles.topCellRow}>
-              <Text style={styles.topCellRank}>#{i + 1}</Text>
-              <Text style={styles.topCellCoord}>
-                ({c.x.toFixed(1)}, {c.y.toFixed(1)})
-              </Text>
-              <View style={styles.topCellBarTrack}>
-                <View
-                  style={[
-                    styles.topCellBarFill,
-                    {width: `${Math.round(c.weight * 100)}%`},
-                  ]}
-                />
-              </View>
-              <Text style={styles.topCellWeight}>
-                d={c.distance.toFixed(1)} · {(c.weight * 100).toFixed(0)}%
-              </Text>
-            </View>
-          ))}
-        </View>
-      ) : null}
-
       {/* R (measurement noise) */}
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>R — measurement noise (LOO)</Text>
-        {rEstimate ? (
-          <>
-            <Text style={styles.codeBlock}>{formatMatrix(rEstimate.R)}</Text>
-            <Text style={styles.statText}>
-              RMSE: {rEstimate.rmse.toFixed(3)} m  ·  n ={' '}
-              {rEstimate.n_samples} cells
-            </Text>
-            <Text style={styles.statText}>
-              mean residual: ({rEstimate.mean_residual.x.toFixed(2)},{' '}
-              {rEstimate.mean_residual.y.toFixed(2)}) m
-            </Text>
-          </>
-        ) : fpStatus?.R ? (
+        <Text style={styles.sectionTitle}>R — measurement noise</Text>
+        {fpStatus?.R ? (
           <Text style={styles.codeBlock}>{formatMatrix(fpStatus.R)}</Text>
         ) : (
-          <Text style={styles.statText}>start tracking to seed R from LOO</Text>
+          <Text style={styles.statText}>start tracking to view R</Text>
         )}
+        <Text style={styles.hint}>
+          Trilateration position noise (m²). Default ≈ 4 (std 2 m).
+          Lower it if the dot is steady, raise it if it jitters.
+        </Text>
       </View>
 
       {/* Q tuning */}
@@ -1132,18 +1049,7 @@ export default function FusionScreen() {
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Pipeline status</Text>
           <Text style={styles.statText}>
-            R source: {fpStatus.r_source}
-          </Text>
-          <Text style={styles.statText}>
-            cells in fingerprint:{' '}
-            {fpStatus.fingerprint_summary?.cell_count ?? '—'}
-          </Text>
-          <Text style={styles.statText}>
-            floor RSSI:{' '}
-            {fpStatus.fingerprint_summary?.floor_rssi !== null &&
-            fpStatus.fingerprint_summary?.floor_rssi !== undefined
-              ? `${fpStatus.fingerprint_summary.floor_rssi.toFixed(2)} dBm`
-              : '—'}
+            RSSI smoothing window: {fpStatus.smoothing_window ?? '—'}
           </Text>
           <Text style={styles.statText}>
             registered beacons: {fpStatus.registered_beacons?.length ?? 0}  ·{' '}

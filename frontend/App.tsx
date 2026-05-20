@@ -5,7 +5,6 @@ import {StatusBar, View, Text, StyleSheet, ActivityIndicator} from 'react-native
 import {loadApiUrl} from './src/config/api';
 
 import SetupScreen from './src/screens/SetupScreen';
-import SiteSurveyScreen from './src/screens/SiteSurveyScreen';
 import FusionScreen from './src/screens/FusionScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
 import BoelterNavigationScreen from './src/screens/BoelterNavigationScreen';
@@ -15,7 +14,6 @@ const Tab = createBottomTabNavigator();
 function TabIcon({label, focused}: {label: string; focused: boolean}) {
   const icons: Record<string, string> = {
     Beacons: '📌',
-    Survey: '🗺',
     Fusion: '🎯',
     Navigation: '🧭',
     Settings: '🔧',
@@ -79,16 +77,6 @@ export default function App() {
             title: 'Beacon Setup',
             tabBarIcon: ({focused}) => (
               <TabIcon label="Beacons" focused={focused} />
-            ),
-          }}
-        />
-        <Tab.Screen
-          name="Survey"
-          component={SiteSurveyScreen}
-          options={{
-            title: 'Site Survey',
-            tabBarIcon: ({focused}) => (
-              <TabIcon label="Survey" focused={focused} />
             ),
           }}
         />
