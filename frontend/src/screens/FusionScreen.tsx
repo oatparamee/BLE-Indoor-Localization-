@@ -47,6 +47,15 @@ interface PathSegment {
   y2: number;
 }
 
+interface RouteResult {
+  start: {id: string; name: string; x: number; y: number};
+  end: {id: string; name: string; x: number; y: number};
+  waypoints: {x: number; y: number}[];
+  length: number;
+  reachable: boolean;
+  reason?: string;
+}
+
 interface REstimate {
   R: number[][];
   rmse: number;
@@ -72,6 +81,48 @@ const TRAIL_MAX = 30;
 const RSSI_FLUSH_MS = 250;
 const POSITION_POLL_MS = 500;
 
+/**
+ * Remaining walking distance from `pos` to the end of `waypoints`:
+ * project `pos` onto the nearest route segment, then sum the rest of
+ * that segment plus every segment after it.
+ */
+function remainingAlongRoute(
+  waypoints: {x: number; y: number}[],
+  pos: {x: number; y: number},
+): number {
+  if (waypoints.length < 2) return 0;
+  let bestD2 = Infinity;
+  let bestSeg = 0;
+  let bestT = 0;
+  for (let i = 0; i < waypoints.length - 1; i++) {
+    const a = waypoints[i];
+    const b = waypoints[i + 1];
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const len2 = dx * dx + dy * dy;
+    let t = len2 > 1e-9 ? ((pos.x - a.x) * dx + (pos.y - a.y) * dy) / len2 : 0;
+    t = Math.max(0, Math.min(1, t));
+    const cx = a.x + t * dx;
+    const cy = a.y + t * dy;
+    const d2 = (cx - pos.x) ** 2 + (cy - pos.y) ** 2;
+    if (d2 < bestD2) {
+      bestD2 = d2;
+      bestSeg = i;
+      bestT = t;
+    }
+  }
+  const a = waypoints[bestSeg];
+  const b = waypoints[bestSeg + 1];
+  let rem = Math.hypot(b.x - a.x, b.y - a.y) * (1 - bestT);
+  for (let i = bestSeg + 1; i < waypoints.length - 1; i++) {
+    rem += Math.hypot(
+      waypoints[i + 1].x - waypoints[i].x,
+      waypoints[i + 1].y - waypoints[i].y,
+    );
+  }
+  return rem;
+}
+
 export default function FusionScreen() {
   const [beacons, setBeacons] = useState<SavedBeacon[]>([]);
   const [tracking, setTracking] = useState(false);
@@ -82,6 +133,10 @@ export default function FusionScreen() {
   const [trail, setTrail] = useState<Array<{x: number; y: number}>>([]);
   const [sigmaAInput, setSigmaAInput] = useState('0.5');
   const [pathSegments, setPathSegments] = useState<PathSegment[]>([]);
+  // Routing: pick a start + destination beacon, get a walkable route.
+  const [routeStartId, setRouteStartId] = useState<string | null>(null);
+  const [routeEndId, setRouteEndId] = useState<string | null>(null);
+  const [route, setRoute] = useState<RouteResult | null>(null);
   // Map zoom in px-per-meter. 12 was the previous hard-coded scale; we
   // keep it as the default so the map opens the same as before. The
   // user can pinch via two fingers (Google Maps-style) or use the
@@ -503,6 +558,53 @@ export default function FusionScreen() {
     .map(p => `${toSvgX(p.x)},${toSvgY(p.y)}`)
     .join(' ');
 
+  // ── Routing ────────────────────────────────────────────────────
+
+  const findRoute = async () => {
+    if (!routeStartId || !routeEndId) {
+      Alert.alert('Pick beacons', 'Select both a start and a destination beacon.');
+      return;
+    }
+    if (routeStartId === routeEndId) {
+      Alert.alert('Pick beacons', 'Start and destination must be different.');
+      return;
+    }
+    try {
+      const res = await api.fpRoute(routeStartId, routeEndId);
+      setRoute(res);
+      if (!res.reachable) {
+        setStatusMsg(
+          `Route: ${res.reason ?? 'no walkable path'} — showing direct line.`,
+        );
+      } else {
+        setStatusMsg(`Route: ${res.length.toFixed(1)} m along the path.`);
+      }
+    } catch (e: any) {
+      Alert.alert('Routing failed', e?.message ?? String(e));
+    }
+  };
+
+  const clearRoute = () => {
+    setRoute(null);
+    setRouteStartId(null);
+    setRouteEndId(null);
+  };
+
+  // Remaining distance from the live KF-smoothed position to the
+  // destination, measured along the route.
+  const distanceToGo = useMemo(() => {
+    if (!route || !position?.smooth_position) return null;
+    return remainingAlongRoute(route.waypoints, position.smooth_position);
+  }, [route, position]);
+
+  const routeSvgPoints = useMemo(
+    () =>
+      route
+        ? route.waypoints.map(p => `${toSvgX(p.x)},${toSvgY(p.y)}`).join(' ')
+        : '',
+    [route, toSvgX, toSvgY],
+  );
+
   // ── Render helpers ─────────────────────────────────────────────
 
   const formatMatrix = (m: number[][] | undefined): string => {
@@ -640,6 +742,106 @@ export default function FusionScreen() {
         </View>
       ) : null}
 
+      {/* Routing */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Routing</Text>
+        {beacons.length < 2 ? (
+          <Text style={styles.statText}>
+            need at least 2 configured beacons to route
+          </Text>
+        ) : (
+          <>
+            <Text style={styles.fieldLabel}>Start beacon</Text>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              style={styles.chipRow}>
+              {beacons.map(b => (
+                <TouchableOpacity
+                  key={`rs-${b.id}`}
+                  style={[
+                    styles.chip,
+                    routeStartId === b.id && styles.chipStart,
+                  ]}
+                  onPress={() => setRouteStartId(b.id)}>
+                  <Text
+                    style={[
+                      styles.chipText,
+                      routeStartId === b.id && styles.chipTextActive,
+                    ]}>
+                    {b.name}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+
+            <Text style={[styles.fieldLabel, {marginTop: 8}]}>
+              Destination beacon
+            </Text>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              style={styles.chipRow}>
+              {beacons.map(b => (
+                <TouchableOpacity
+                  key={`re-${b.id}`}
+                  style={[
+                    styles.chip,
+                    routeEndId === b.id && styles.chipEnd,
+                  ]}
+                  onPress={() => setRouteEndId(b.id)}>
+                  <Text
+                    style={[
+                      styles.chipText,
+                      routeEndId === b.id && styles.chipTextActive,
+                    ]}>
+                    {b.name}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+
+            <View style={styles.buttonRow}>
+              <TouchableOpacity
+                style={styles.primaryButton}
+                onPress={findRoute}>
+                <Text style={styles.primaryButtonText}>Find route</Text>
+              </TouchableOpacity>
+              {route ? (
+                <TouchableOpacity
+                  style={styles.secondaryButton}
+                  onPress={clearRoute}>
+                  <Text style={styles.secondaryButtonText}>Clear</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+
+            {route ? (
+              <View style={{marginTop: 10}}>
+                <Text style={styles.statText}>
+                  {route.start.name} → {route.end.name}
+                </Text>
+                <Text style={styles.statText}>
+                  route length: {route.length.toFixed(1)} m
+                  {route.reachable
+                    ? ''
+                    : '  (direct line — no walkable path)'}
+                </Text>
+                {distanceToGo !== null ? (
+                  <Text style={styles.bigNumber}>
+                    {distanceToGo.toFixed(1)} m to go
+                  </Text>
+                ) : (
+                  <Text style={styles.hint}>
+                    start tracking to see live distance-to-go
+                  </Text>
+                )}
+              </View>
+            ) : null}
+          </>
+        )}
+      </View>
+
       {/* Map */}
       {bbox && (
         <View style={styles.section}>
@@ -708,6 +910,38 @@ export default function FusionScreen() {
                   strokeOpacity={0.55}
                 />
               ))}
+
+              {/* Route — drawn above the walkable path, below the
+                  position dots so the green "you" marker reads on top. */}
+              {route && routeSvgPoints ? (
+                <>
+                  <Polyline
+                    points={routeSvgPoints}
+                    fill="none"
+                    stroke={route.reachable ? '#f0883e' : '#8b949e'}
+                    strokeWidth={4}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeDasharray={route.reachable ? undefined : '6 4'}
+                  />
+                  <Circle
+                    cx={toSvgX(route.start.x)}
+                    cy={toSvgY(route.start.y)}
+                    r={9}
+                    fill="#f0883e"
+                    stroke="#0d1117"
+                    strokeWidth={2}
+                  />
+                  <Circle
+                    cx={toSvgX(route.end.x)}
+                    cy={toSvgY(route.end.y)}
+                    r={9}
+                    fill="none"
+                    stroke="#f0883e"
+                    strokeWidth={3}
+                  />
+                </>
+              ) : null}
 
               {/* Trail */}
               {trailPoints.length > 0 ? (
@@ -1089,6 +1323,36 @@ const styles = StyleSheet.create({
     color: '#8b949e',
     marginBottom: 4,
     fontWeight: '500',
+  },
+  chipRow: {
+    flexDirection: 'row',
+    marginBottom: 4,
+  },
+  chip: {
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#30363d',
+    backgroundColor: '#161b22',
+    marginRight: 6,
+  },
+  chipStart: {
+    backgroundColor: '#3a2a13',
+    borderColor: '#f0883e',
+  },
+  chipEnd: {
+    backgroundColor: '#1b2b3a',
+    borderColor: '#58a6ff',
+  },
+  chipText: {
+    color: '#8b949e',
+    fontSize: 12,
+    fontFamily: 'monospace',
+  },
+  chipTextActive: {
+    color: '#e6edf3',
+    fontWeight: '600',
   },
   coordsRow: {flexDirection: 'row', alignItems: 'flex-end'},
   input: {
