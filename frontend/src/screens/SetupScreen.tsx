@@ -33,6 +33,7 @@ export default function SetupScreen() {
   const [uuidInput, setUuidInput] = useState('');
   const [majorInput, setMajorInput] = useState('');
   const [minorInput, setMinorInput] = useState('');
+  const [aliasesInput, setAliasesInput] = useState('');
   const [saveError, setSaveError] = useState('');
 
   const unsubRef = useRef<(() => void) | null>(null);
@@ -95,6 +96,7 @@ export default function SetupScreen() {
         ? String(reading.ibeacon.minor)
         : '',
     );
+    setAliasesInput((existing?.aliases ?? []).join(', '));
     setSaveError('');
   };
 
@@ -171,14 +173,23 @@ export default function SetupScreen() {
       minor = minParsed;
     }
 
+    // Alternate advertised names — comma-separated. Cleaned of blanks
+    // and of any entry that just repeats the primary name.
+    const primaryName = nameInput.trim() || editTarget.advertisedName;
+    const aliases = aliasesInput
+      .split(',')
+      .map(a => a.trim())
+      .filter(a => a.length > 0 && a.toLowerCase() !== primaryName.toLowerCase());
+
     const beacon: SavedBeacon = {
       id: editTarget.id,
-      name: nameInput.trim() || editTarget.advertisedName,
+      name: primaryName,
       x,
       y,
       ...(q !== undefined ? {q} : {}),
       ...(r !== undefined ? {r} : {}),
       ...(uuid !== undefined ? {uuid, major, minor} : {}),
+      ...(aliases.length > 0 ? {aliases} : {}),
     };
     await saveBeacon(beacon);
     setConfig({...getBeaconConfig()});
@@ -414,6 +425,22 @@ export default function SetupScreen() {
                 />
               </View>
             </View>
+
+            <Text style={styles.kalmanHint}>
+              Alternate names (optional, comma-separated). A beacon can
+              advertise a different name to a different phone — add each
+              name you see so any phone resolves to this same beacon.
+            </Text>
+            <Text style={styles.fieldLabel}>Alternate names</Text>
+            <TextInput
+              style={styles.fieldInput}
+              value={aliasesInput}
+              onChangeText={setAliasesInput}
+              placeholder="e.g. KBPro_472039, BlueCharm_0521"
+              placeholderTextColor="#6e7681"
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
 
             <Text style={styles.kalmanHint}>
               1D Kalman noise (optional — auto-filled by RSSI Profile screen).

@@ -31,6 +31,11 @@ export interface SavedBeacon {
   major?: number;
   /** iBeacon Minor (0-65535). */
   minor?: number;
+  /** Alternate advertised names this beacon is known to broadcast.
+   *  iOS reports a beacon's name inconsistently across phones, so one
+   *  physical beacon can appear under several names — each resolves to
+   *  the same beacon at match time. */
+  aliases?: string[];
 }
 
 const LEGACY_STORAGE_KEY = '@ble_beacon_config_v1';
@@ -54,6 +59,12 @@ function normalize(b: PersistedBeacon | SavedBeacon): SavedBeacon {
   }
   if (typeof b.minor === 'number' && Number.isFinite(b.minor)) {
     out.minor = b.minor;
+  }
+  if (Array.isArray(b.aliases)) {
+    const cleaned = b.aliases
+      .map(a => String(a).trim())
+      .filter(a => a.length > 0);
+    if (cleaned.length > 0) out.aliases = cleaned;
   }
   return out;
 }

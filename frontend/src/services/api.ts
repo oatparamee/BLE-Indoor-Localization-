@@ -72,6 +72,11 @@ export interface PersistedBeacon {
   major?: number;
   /** iBeacon Minor (0-65535). */
   minor?: number;
+  /** Alternate advertised names this physical beacon is known to
+   *  broadcast. iOS reports a beacon's name inconsistently across
+   *  phones, so a beacon can legitimately appear under several names —
+   *  each alias resolves to this same beacon. */
+  aliases?: string[];
 }
 
 export const api = {

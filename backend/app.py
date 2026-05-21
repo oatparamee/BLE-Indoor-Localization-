@@ -140,6 +140,11 @@ def beacons_upsert():
     except (TypeError, ValueError):
         return jsonify({"error": "major/minor must be integers or null"}), 400
 
+    # `aliases` — alternate advertised names (a list, or a single
+    # comma-separated string). Lets one physical beacon be matched by
+    # whatever name a given phone happens to report for it.
+    aliases_val = data.get("aliases")
+
     entry = beacon_store.upsert(
         str(bid),
         str(name),
@@ -150,6 +155,7 @@ def beacons_upsert():
         uuid=uuid_val,
         major=major_val,
         minor=minor_val,
+        aliases=aliases_val,
     )
     beacon_store.save()
     return jsonify({"status": "saved", "beacon": entry})
@@ -235,6 +241,13 @@ def _canonicalize_events(events: list) -> list:
         nm = entry.get("name")
         if nm:
             by_name[str(nm).strip().lower()] = bid_str
+        # Alternate advertised names — a beacon may broadcast a
+        # different name to a different phone (iOS localName vs
+        # GATT-cached name), so each alias resolves to the same id.
+        for alias in entry.get("aliases", []):
+            alias_low = str(alias).strip().lower()
+            if alias_low:
+                by_name[alias_low] = bid_str
         by_upper_id[bid_str.upper()] = bid_str
         u = entry.get("uuid")
         mj = entry.get("major")

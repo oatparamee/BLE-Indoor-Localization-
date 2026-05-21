@@ -19,6 +19,28 @@ DEFAULT_PATH = os.path.join(os.path.dirname(__file__), "data", "beacons.json")
 SCHEMA_VERSION = 1
 
 
+def _normalize_aliases(aliases, primary_name: str = "") -> list:
+    """Clean a list of alternate names: strip, drop empties, drop any
+    that duplicate the primary name, and dedupe case-insensitively
+    (keeping the first spelling seen). Accepts a list or a single
+    comma-separated string."""
+    if aliases is None:
+        return []
+    if isinstance(aliases, str):
+        aliases = aliases.split(",")
+    primary = str(primary_name).strip().lower()
+    out: list = []
+    seen = set()
+    for a in aliases:
+        s = str(a).strip()
+        low = s.lower()
+        if not s or low == primary or low in seen:
+            continue
+        seen.add(low)
+        out.append(s)
+    return out
+
+
 class BeaconStore:
     def __init__(self, path: Optional[str] = None):
         self.path = path or DEFAULT_PATH
@@ -64,6 +86,7 @@ class BeaconStore:
         uuid: Optional[str] = None,
         major: Optional[int] = None,
         minor: Optional[int] = None,
+        aliases: Optional[list] = None,
     ) -> dict:
         entry = {
             "id": str(beacon_id),
@@ -75,6 +98,14 @@ class BeaconStore:
             entry["q"] = float(q)
         if r is not None:
             entry["r"] = float(r)
+        # `aliases` — alternate advertised names this physical beacon is
+        # known to broadcast. iOS reports a beacon's name inconsistently
+        # across phones (advertised localName vs GATT-cached name), so a
+        # beacon can legitimately appear under more than one name. Each
+        # alias is matched, case-insensitively, by the canonicaliser.
+        cleaned_aliases = _normalize_aliases(aliases, primary_name=str(name))
+        if cleaned_aliases:
+            entry["aliases"] = cleaned_aliases
         if uuid is not None and str(uuid).strip():
             entry["uuid"] = str(uuid).strip().upper()
         if major is not None:
@@ -153,7 +184,8 @@ class BeaconStore:
         return None
 
     def find_by_name(self, name: Optional[str]) -> Optional[dict]:
-        """Find a beacon by case-insensitive name match."""
+        """Find a beacon by case-insensitive match against its primary
+        name OR any of its aliases."""
         if not name:
             return None
         target = str(name).strip().lower()
@@ -163,4 +195,7 @@ class BeaconStore:
             for entry in self._beacons.values():
                 if str(entry.get("name", "")).strip().lower() == target:
                     return dict(entry)
+                for alias in entry.get("aliases", []):
+                    if str(alias).strip().lower() == target:
+                        return dict(entry)
         return None
