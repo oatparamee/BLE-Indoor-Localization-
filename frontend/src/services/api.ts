@@ -195,4 +195,16 @@ export const api = {
   fpPathSet: (
     segments: {x1: number; y1: number; x2: number; y2: number}[],
   ) => post('/fp/path', {segments}),
+
+  /** Shortest walking route between two registered beacons, following
+   *  the walkable-path polyline. */
+  fpRoute: (start_beacon_id: string, end_beacon_id: string) =>
+    post('/fp/route', {start_beacon_id, end_beacon_id}) as Promise<{
+      start: {id: string; name: string; x: number; y: number};
+      end: {id: string; name: string; x: number; y: number};
+      waypoints: {x: number; y: number}[];
+      length: number;
+      reachable: boolean;
+      reason?: string;
+    }>,
 };

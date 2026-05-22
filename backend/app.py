@@ -47,6 +47,7 @@ from fingerprint_match import match as fingerprint_match
 from fingerprint_pipeline import FingerprintPipeline
 from path_constraint import PathConstraint
 from r_estimator import estimate_r_loo
+from routing import compute_route
 from survey import SurveyCollector
 
 
@@ -670,6 +671,51 @@ def fp_path_set():
     except OSError as exc:
         return jsonify({"error": f"failed to persist path: {exc}"}), 500
     return jsonify({"status": "saved", "segments": path_constraint.segments()})
+
+
+@app.route("/fp/route", methods=["POST"])
+def fp_route():
+    """Shortest walking route between two registered beacons, following
+    the walkable-path polyline (/fp/path).
+
+    Body:
+        { "start_beacon_id": "...", "end_beacon_id": "..." }
+
+    Returns the ordered waypoints + total length. `reachable` is false
+    when there is no path polyline, or the two beacons are on
+    disconnected path components — in that case `waypoints` degrades to
+    a direct start→end line.
+    """
+    data = request.get_json(force=True) or {}
+    start_id = data.get("start_beacon_id")
+    end_id = data.get("end_beacon_id")
+    if not start_id or not end_id:
+        return jsonify({"error": "start_beacon_id and end_beacon_id are required"}), 400
+    if str(start_id) == str(end_id):
+        return jsonify({"error": "start and destination must be different beacons"}), 400
+
+    start_b = beacon_store.get(str(start_id))
+    end_b = beacon_store.get(str(end_id))
+    if start_b is None or end_b is None:
+        missing = "start" if start_b is None else "destination"
+        return jsonify({"error": f"{missing} beacon is not registered"}), 404
+
+    route = compute_route(
+        path_constraint.segments(),
+        (start_b["x"], start_b["y"]),
+        (end_b["x"], end_b["y"]),
+    )
+    return jsonify({
+        "start": {
+            "id": start_b["id"], "name": start_b["name"],
+            "x": start_b["x"], "y": start_b["y"],
+        },
+        "end": {
+            "id": end_b["id"], "name": end_b["name"],
+            "x": end_b["x"], "y": end_b["y"],
+        },
+        **route,
+    })
 
 
 @app.route("/fp/r/estimate", methods=["GET"])
