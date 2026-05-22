@@ -117,6 +117,12 @@ export default function FusionScreen() {
   const [eventsSent, setEventsSent] = useState(0);
   const [eventsSentTotal, setEventsSentTotal] = useState(0);
   const eventsSinceLastTickRef = useRef(0);
+  // Backend /fp state is per phone. This id keeps one device's latest
+  // RSSI cache and Kalman state separate from another phone connected
+  // to the same Flask server.
+  const fpSessionIdRef = useRef(
+    `fusion-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+  );
 
   useEffect(() => {
     beaconsRef.current = beacons;
@@ -181,7 +187,11 @@ export default function FusionScreen() {
       setBeacons(beaconList);
       beaconsRef.current = beaconList;
 
-      const res = await api.fpStart({sigma_a, seed_r_from_loo: true});
+      const sessionId = fpSessionIdRef.current;
+      const res = await api.fpStart(
+        {sigma_a, seed_r_from_loo: true},
+        sessionId,
+      );
       setREstimate(res?.r_estimate ?? null);
       bleScanner.drainRawEvents();
       setTrail([]);
@@ -255,7 +265,7 @@ export default function FusionScreen() {
           return;
         }
         try {
-          await api.fpRssiEvents(filtered);
+          await api.fpRssiEvents(filtered, sessionId);
           setEventsSent(filtered.length);
           eventsSinceLastTickRef.current += filtered.length;
         } catch (err: any) {
@@ -270,7 +280,7 @@ export default function FusionScreen() {
         eventsSinceLastTickRef.current = 0;
         setEventsSentTotal(prev => prev + sinceLast);
         try {
-          const p = (await api.fpPositionLatest()) as PositionResult;
+          const p = (await api.fpPositionLatest(sessionId)) as PositionResult;
           setPosition(p);
           if (p.ready && p.smooth_position) {
             setTrail(prev => {
@@ -278,7 +288,7 @@ export default function FusionScreen() {
               return next.length > TRAIL_MAX ? next.slice(-TRAIL_MAX) : next;
             });
           }
-          const s = (await api.fpStatus()) as FpStatus;
+          const s = (await api.fpStatus(sessionId)) as FpStatus;
           setFpStatus(s);
         } catch (err: any) {
           setStatusMsg(`position poll error: ${err?.message ?? err}`);
@@ -295,13 +305,16 @@ export default function FusionScreen() {
     setTracking(false);
     setStatusMsg('Stopped.');
     try {
-      await api.fpReset();
+      await api.fpReset(fpSessionIdRef.current);
     } catch {}
   };
 
   const reseedR = async () => {
     try {
-      const res = await api.fpStart({seed_r_from_loo: true});
+      const res = await api.fpStart(
+        {seed_r_from_loo: true},
+        fpSessionIdRef.current,
+      );
       setREstimate(res?.r_estimate ?? null);
       setStatusMsg('R re-seeded from LOO.');
       setTrail([]);
@@ -318,11 +331,11 @@ export default function FusionScreen() {
       return;
     }
     try {
-      await api.fpParams({sigma_a});
+      await api.fpParams({sigma_a}, fpSessionIdRef.current);
       setStatusMsg(`sigma_a set to ${sigma_a}.`);
       // Refresh status so the displayed value is authoritative
       try {
-        const s = (await api.fpStatus()) as FpStatus;
+        const s = (await api.fpStatus(fpSessionIdRef.current)) as FpStatus;
         setFpStatus(s);
       } catch {}
     } catch (e: any) {

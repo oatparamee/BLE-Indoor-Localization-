@@ -36,6 +36,8 @@
 ==========================================================================
 """
 
+import threading
+
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
@@ -64,15 +66,14 @@ survey_collector = SurveyCollector()
 # can render it and let the user edit it.
 path_constraint = PathConstraint()
 
-# Fingerprint-based live tracking pipeline. Reads the same
-# FingerprintStore the survey writes to. The beacon_store is wired in
-# so the matcher only considers the user's registered anchors (and
-# ignores any rogue id that leaked into the fingerprint).
-fp_pipeline = FingerprintPipeline(
-    store=fingerprint_store,
-    beacon_store=beacon_store,
-    path_constraint=path_constraint,
-)
+# Fingerprint-based live tracking pipelines. Each phone/session gets its
+# own latest-RSSI cache and Kalman state; otherwise two phones streaming
+# at once would overwrite each other's measurements and the position would
+# jump between devices. The shared FingerprintStore, BeaconStore, and path
+# constraint remain global because those are site configuration, not live
+# per-phone state.
+fp_pipelines = {}
+fp_pipelines_lock = threading.Lock()
 
 
 # ---------- Health ----------
@@ -182,6 +183,26 @@ def _survey_session_id(data=None):
     if data and data.get("session_id"):
         return str(data.get("session_id"))
     return str(request.args.get("session_id") or "default")
+
+
+def _fp_session_id(data=None):
+    if data and data.get("session_id"):
+        return str(data.get("session_id"))
+    return str(request.args.get("session_id") or "default")
+
+
+def _get_fp_pipeline(session_id="default"):
+    sid = str(session_id or "default")
+    with fp_pipelines_lock:
+        pipeline = fp_pipelines.get(sid)
+        if pipeline is None:
+            pipeline = FingerprintPipeline(
+                store=fingerprint_store,
+                beacon_store=beacon_store,
+                path_constraint=path_constraint,
+            )
+            fp_pipelines[sid] = pipeline
+        return pipeline
 
 
 @app.route("/survey/start", methods=["POST"])
@@ -460,6 +481,8 @@ def fp_start():
     sparse / no LOO seed was requested.
     """
     data = request.get_json(silent=True) or {}
+    session_id = _fp_session_id(data)
+    fp_pipeline = _get_fp_pipeline(session_id)
     sigma_a = data.get("sigma_a")
     if sigma_a is not None:
         try:
@@ -475,6 +498,7 @@ def fp_start():
 
     return jsonify({
         "status": "fp pipeline started",
+        "session_id": session_id,
         "r_estimate": estimate,
         "fingerprint_summary": fingerprint_store.summary(),
     })
@@ -497,6 +521,8 @@ def fp_rssi_events():
     in the same building cannot pollute the matcher with noise.
     """
     data = request.get_json(force=True) or {}
+    session_id = _fp_session_id(data)
+    fp_pipeline = _get_fp_pipeline(session_id)
     events = data.get("events")
     if events is None and "beacon_id" in data and "rssi" in data:
         events = [{"beacon_id": data["beacon_id"], "rssi": data["rssi"]}]
@@ -517,6 +543,7 @@ def fp_rssi_events():
     return jsonify({
         "applied": applied,
         "received": len(events),
+        "session_id": session_id,
         "rejected_unregistered": rejected_count,
     })
 
@@ -526,11 +553,14 @@ def fp_position_latest():
     """Match the latest RSSI vector against the fingerprint and run the
     4D KF. Returns ready=true with smoothed (x, y) + velocity, OR
     ready=false with a reason when no match is possible."""
+    session_id = _fp_session_id()
+    fp_pipeline = _get_fp_pipeline(session_id)
     result = fp_pipeline.update_position()
     if result is None:
         active = fp_pipeline.get_status().get("active_beacons", [])
         return jsonify({
             "ready": False,
+            "session_id": session_id,
             "reason": (
                 "no active beacons yet"
                 if not active
@@ -548,6 +578,7 @@ def fp_position_latest():
         # `beacon_name` or the beacon registry is missing entries.
         return jsonify({
             "ready": False,
+            "session_id": session_id,
             "reason": (
                 "BLE ids do not match the fingerprint — "
                 "active beacons are not in the surveyed set"
@@ -555,18 +586,23 @@ def fp_position_latest():
             "active_beacons": result["active_beacons"],
             "registered_beacons": result["registered_beacons"],
         })
-    return jsonify({"ready": True, **result})
+    return jsonify({"ready": True, "session_id": session_id, **result})
 
 
 @app.route("/fp/reset", methods=["POST"])
 def fp_reset():
+    data = request.get_json(silent=True) or {}
+    session_id = _fp_session_id(data)
+    fp_pipeline = _get_fp_pipeline(session_id)
     fp_pipeline.reset()
-    return jsonify({"status": "fp pipeline reset"})
+    return jsonify({"status": "fp pipeline reset", "session_id": session_id})
 
 
 @app.route("/fp/status", methods=["GET"])
 def fp_status():
-    return jsonify(fp_pipeline.get_status())
+    session_id = _fp_session_id()
+    fp_pipeline = _get_fp_pipeline(session_id)
+    return jsonify({"session_id": session_id, **fp_pipeline.get_status()})
 
 
 @app.route("/fp/params", methods=["POST"])
@@ -583,6 +619,8 @@ def fp_params():
     and overrides any LOO-derived value.
     """
     data = request.get_json(force=True) or {}
+    session_id = _fp_session_id(data)
+    fp_pipeline = _get_fp_pipeline(session_id)
     sigma_a = data.get("sigma_a")
     r = data.get("R")
     try:
@@ -600,7 +638,11 @@ def fp_params():
         r_np = None
 
     fp_pipeline.set_params(sigma_a=sa, r=r_np)
-    return jsonify({"status": "updated", **fp_pipeline.get_status()})
+    return jsonify({
+        "status": "updated",
+        "session_id": session_id,
+        **fp_pipeline.get_status(),
+    })
 
 
 @app.route("/fp/path", methods=["GET"])

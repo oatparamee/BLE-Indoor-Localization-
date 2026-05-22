@@ -154,28 +154,33 @@ export const api = {
   // ── Fingerprint live pipeline (raw RSSI -> match -> 4D KF) ────────
 
   /** Start the fingerprint pipeline. Optionally re-seed R from LOO cross-val. */
-  fpStart: (opts?: {sigma_a?: number; seed_r_from_loo?: boolean}) =>
+  fpStart: (
+    opts?: {sigma_a?: number; seed_r_from_loo?: boolean},
+    session_id?: string,
+  ) =>
     post('/fp/start', {
       sigma_a: opts?.sigma_a,
       seed_r_from_loo: opts?.seed_r_from_loo ?? true,
+      session_id,
     }),
 
   /** Stream raw RSSI events into the fingerprint pipeline. */
-  fpRssiEvents: (events: RssiEvent[]) =>
-    post('/fp/rssi/events', {events}),
+  fpRssiEvents: (events: RssiEvent[], session_id?: string) =>
+    post('/fp/rssi/events', {events, session_id}),
 
   /** Latest match + 4D KF output. */
-  fpPositionLatest: () => get('/fp/position/latest'),
+  fpPositionLatest: (session_id?: string) =>
+    get(withSession('/fp/position/latest', session_id)),
 
   /** Reset the live pipeline (clear cached RSSI + KF state). */
-  fpReset: () => post('/fp/reset', {}),
+  fpReset: (session_id?: string) => post('/fp/reset', {session_id}),
 
   /** Diagnostic snapshot of the live pipeline (sigma_a, R, r_source, etc.). */
-  fpStatus: () => get('/fp/status'),
+  fpStatus: (session_id?: string) => get(withSession('/fp/status', session_id)),
 
   /** Live-tune sigma_a (Q) and/or R (2x2). */
-  fpParams: (params: {sigma_a?: number; R?: number[][]}) =>
-    post('/fp/params', params),
+  fpParams: (params: {sigma_a?: number; R?: number[][]}, session_id?: string) =>
+    post('/fp/params', {...params, session_id}),
 
   /** Run LOO cross-val WITHOUT applying the result. For inspection. */
   fpREstimate: () => get('/fp/r/estimate'),
