@@ -21,7 +21,6 @@ import {
   IndoorDestination,
   MapPoint,
   NavigationBeaconMarker,
-  projectSixFloorMapPointToMeters,
   projectSixFloorMeterPointToMap,
   prototypeMaps,
 } from '../data/mockIndoorDestinations';
@@ -47,8 +46,174 @@ interface BuiltNavigationRoute {
   status: string;
 }
 
+interface PathSegmentMeters {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+}
+
+interface SixFloorPathSegment {
+  startMeters: MapPoint;
+  endMeters: MapPoint;
+  startMap: MapPoint;
+  endMap: MapPoint;
+}
+
+interface SixFloorPathProjection {
+  mapPoint: MapPoint;
+  meters: MapPoint;
+  distance: number;
+  segment: SixFloorPathSegment;
+}
+
 const getVerticalTransferPoint = (floor: FloorCode): MapPoint =>
   floor === '6F' ? {x: 77, y: 24} : {x: 66, y: 34};
+
+const getPointDistance = (a: MapPoint, b: MapPoint) =>
+  Math.hypot(a.x - b.x, a.y - b.y);
+
+const clampUnit = (value: number) => Math.min(1, Math.max(0, value));
+
+function buildSixFloorPathSegments(
+  pathSegments: PathSegmentMeters[],
+  beaconList: SavedBeacon[]
+): SixFloorPathSegment[] {
+  return pathSegments
+    .map((segment): SixFloorPathSegment | null => {
+      const startMeters = {x: segment.x1, y: segment.y1};
+      const endMeters = {x: segment.x2, y: segment.y2};
+      const startMap = projectSixFloorMeterPointToMap(startMeters, beaconList);
+      const endMap = projectSixFloorMeterPointToMap(endMeters, beaconList);
+
+      if (!startMap || !endMap) {
+        return null;
+      }
+
+      return {startMeters, endMeters, startMap, endMap};
+    })
+    .filter((segment): segment is SixFloorPathSegment => segment !== null);
+}
+
+function projectRoomOntoPathSegment(
+  roomPoint: MapPoint,
+  segment: SixFloorPathSegment
+): SixFloorPathProjection {
+  const dx = segment.endMap.x - segment.startMap.x;
+  const dy = segment.endMap.y - segment.startMap.y;
+  const lengthSquared = dx * dx + dy * dy;
+  const t =
+    lengthSquared <= 0
+      ? 0
+      : clampUnit(
+          ((roomPoint.x - segment.startMap.x) * dx +
+            (roomPoint.y - segment.startMap.y) * dy) /
+            lengthSquared
+        );
+  const mapPoint = {
+    x: segment.startMap.x + dx * t,
+    y: segment.startMap.y + dy * t,
+  };
+  const meters = {
+    x: segment.startMeters.x + (segment.endMeters.x - segment.startMeters.x) * t,
+    y: segment.startMeters.y + (segment.endMeters.y - segment.startMeters.y) * t,
+  };
+
+  return {
+    mapPoint,
+    meters,
+    distance: getPointDistance(roomPoint, mapPoint),
+    segment,
+  };
+}
+
+function isVerticalMapSegment(segment: SixFloorPathSegment) {
+  return (
+    Math.abs(segment.endMap.y - segment.startMap.y) >
+    Math.abs(segment.endMap.x - segment.startMap.x)
+  );
+}
+
+function getSegmentMidY(segment: SixFloorPathSegment) {
+  return (segment.startMap.y + segment.endMap.y) / 2;
+}
+
+function getSegmentMidX(segment: SixFloorPathSegment) {
+  return (segment.startMap.x + segment.endMap.x) / 2;
+}
+
+function getClosestProjection(
+  projections: SixFloorPathProjection[]
+): SixFloorPathProjection | null {
+  return projections.reduce<SixFloorPathProjection | null>(
+    (closest, projection) =>
+      !closest || projection.distance < closest.distance ? projection : closest,
+    null
+  );
+}
+
+function getSixFloorPathAccessProjection(
+  roomPoint: MapPoint,
+  pathSegments: SixFloorPathSegment[]
+): SixFloorPathProjection | null {
+  const projections = pathSegments.map((segment) =>
+    projectRoomOntoPathSegment(roomPoint, segment)
+  );
+  const verticalProjections = projections.filter((projection) =>
+    isVerticalMapSegment(projection.segment)
+  );
+  const horizontalProjections = projections.filter(
+    (projection) => !isVerticalMapSegment(projection.segment)
+  );
+  const topProjection = getClosestProjection(
+    horizontalProjections.filter(
+      (projection) =>
+        getSegmentMidY(projection.segment) ===
+        Math.min(...horizontalProjections.map((item) => getSegmentMidY(item.segment)))
+    )
+  );
+  const bottomProjection = getClosestProjection(
+    horizontalProjections.filter(
+      (projection) =>
+        getSegmentMidY(projection.segment) ===
+        Math.max(...horizontalProjections.map((item) => getSegmentMidY(item.segment)))
+    )
+  );
+  const verticalProjection = getClosestProjection(verticalProjections);
+
+  if (topProjection && roomPoint.y <= topProjection.mapPoint.y + 4) {
+    return topProjection;
+  }
+
+  if (bottomProjection && roomPoint.y >= bottomProjection.mapPoint.y + 3) {
+    return bottomProjection;
+  }
+
+  if (verticalProjection) {
+    const verticalX = getSegmentMidX(verticalProjection.segment);
+    const topY = topProjection?.mapPoint.y ?? 0;
+    const bottomY = bottomProjection?.mapPoint.y ?? 100;
+
+    if (
+      roomPoint.x >= verticalX - 14 &&
+      roomPoint.x <= verticalX + 8 &&
+      roomPoint.y >= topY - 4 &&
+      roomPoint.y <= bottomY + 2
+    ) {
+      return verticalProjection;
+    }
+  }
+
+  if (topProjection && roomPoint.y <= topProjection.mapPoint.y + 14) {
+    return topProjection;
+  }
+
+  if (bottomProjection && roomPoint.y >= bottomProjection.mapPoint.y - 8) {
+    return bottomProjection;
+  }
+
+  return getClosestProjection(projections);
+}
 
 function buildFallbackNavigationRoute(
   source: IndoorDestination,
@@ -443,31 +608,52 @@ export function IndoorNavigatorApp() {
     const beaconList = Object.values(config);
     setBeaconMarkers(buildSixFloorNavigationBeaconMarkers(beaconList));
 
-    const startMeters = projectSixFloorMapPointToMeters(
-      source.mapPoint,
+    const path = await api.fpPathGet();
+    const pathSegments = buildSixFloorPathSegments(
+      path.segments ?? [],
       beaconList
     );
-    const endMeters = projectSixFloorMapPointToMeters(
+    const startAccess = getSixFloorPathAccessProjection(
+      source.mapPoint,
+      pathSegments
+    );
+    const endAccess = getSixFloorPathAccessProjection(
       destination.mapPoint,
-      beaconList
+      pathSegments
     );
 
-    if (!startMeters || !endMeters) {
+    if (!startAccess || !endAccess) {
       return null;
+    }
+
+    if (getPointDistance(startAccess.meters, endAccess.meters) < 0.01) {
+      return {
+        route: {
+          id: `route-${source.id}-to-${destination.id}`,
+          name: `${source.name} to ${destination.name}`,
+          segments: [
+            {
+              floor: '6F',
+              points: [startAccess.mapPoint, endAccess.mapPoint],
+            },
+          ],
+        },
+        status: `${source.name} to ${destination.name}: same 6F path access point.`,
+      };
     }
 
     const route = await api.fpRoutePoints(
       {
         id: source.id,
         name: source.name,
-        x: startMeters.x,
-        y: startMeters.y,
+        x: startAccess.meters.x,
+        y: startAccess.meters.y,
       },
       {
         id: destination.id,
         name: destination.name,
-        x: endMeters.x,
-        y: endMeters.y,
+        x: endAccess.meters.x,
+        y: endAccess.meters.y,
       }
     );
     const routePoints = route.waypoints
