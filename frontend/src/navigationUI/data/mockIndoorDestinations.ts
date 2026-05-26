@@ -379,20 +379,32 @@ const SIX_FLOOR_PIXELS_PER_METER = 802 / 72.2;
 const SIX_FLOOR_BCPRO_1_PERCENT = point(21, 12);
 const SIX_FLOOR_BCPRO_15_X_PERCENT = 24;
 
-const sixFloorNavigationBeaconNames = new Set([
+const sixFloorTopWallBeaconNames = new Set([
   'BCPro_1',
   'BCPro_3',
   'BCPro_6',
   'BCPro_0',
+]);
+
+const sixFloorRightWallBeaconNames = new Set([
   'BCPro_7',
   'BCPro_10',
   'BCPro_5',
   'BCPro_9',
   'BCPro_17',
+]);
+
+const sixFloorBottomWallBeaconNames = new Set([
   'BCPro_18',
   'BCPro_67',
   'BCPro_19',
   'BCPro_15',
+]);
+
+const sixFloorNavigationBeaconNames = new Set([
+  ...sixFloorTopWallBeaconNames,
+  ...sixFloorRightWallBeaconNames,
+  ...sixFloorBottomWallBeaconNames,
 ]);
 
 interface BeaconLike {
@@ -400,12 +412,6 @@ interface BeaconLike {
   name: string;
   x: number;
   y: number;
-}
-
-interface ScaledTransform {
-  sourceOrigin: MapPoint;
-  mapOriginPx: MapPoint;
-  rotationRadians: number;
 }
 
 function percentToMapPx(percentPoint: MapPoint): MapPoint {
@@ -422,73 +428,61 @@ function mapPxToPercent(pixelPoint: MapPoint): MapPoint {
   };
 }
 
-function buildScaledSixFloorTransform(
+function buildSnappedSixFloorWallProjection(
   byName: Map<string, BeaconLike>
-): ScaledTransform | null {
+): ((beacon: BeaconLike) => MapPoint | null) | null {
   const originBeacon = byName.get('BCPro_15');
   const referenceBeacon = byName.get('BCPro_1');
+  const rightCornerBeacon = byName.get('BCPro_7');
 
-  if (!originBeacon || !referenceBeacon) {
+  if (!originBeacon || !referenceBeacon || !rightCornerBeacon) {
     return null;
   }
 
-  const sourceOrigin = point(originBeacon.x, originBeacon.y);
-  const sourceReferenceDelta = {
-    x: referenceBeacon.x - originBeacon.x,
-    y: referenceBeacon.y - originBeacon.y,
-  };
-  const referenceDistancePx =
-    Math.hypot(sourceReferenceDelta.x, sourceReferenceDelta.y) *
-    SIX_FLOOR_PIXELS_PER_METER;
   const referencePx = percentToMapPx(SIX_FLOOR_BCPRO_1_PERCENT);
-  const originX =
+  const bottomOriginX =
     (SIX_FLOOR_BCPRO_15_X_PERCENT / 100) * SIX_FLOOR_MAP_SIZE_PX.width;
-  const originDeltaX = referencePx.x - originX;
-
-  if (Math.abs(originDeltaX) >= referenceDistancePx) {
-    return null;
-  }
-
-  // BCPro_15 is under BCPro_1 on the 6F map; solve y from the fixed scale.
-  const originY =
+  const topWallY = referencePx.y;
+  const rightWallX =
+    referencePx.x +
+    (rightCornerBeacon.y - referenceBeacon.y) * SIX_FLOOR_PIXELS_PER_METER;
+  const rightWallStartY =
     referencePx.y +
-    Math.sqrt(referenceDistancePx * referenceDistancePx - originDeltaX * originDeltaX);
-  const mapOriginPx = {x: originX, y: originY};
-  const mapReferenceDelta = {
-    x: referencePx.x - mapOriginPx.x,
-    y: referencePx.y - mapOriginPx.y,
-  };
-  const sourceAngle = Math.atan2(
-    sourceReferenceDelta.y,
-    sourceReferenceDelta.x
-  );
-  const mapAngle = Math.atan2(mapReferenceDelta.y, mapReferenceDelta.x);
+    (referenceBeacon.x - rightCornerBeacon.x) * SIX_FLOOR_PIXELS_PER_METER;
+  const bottomWallY =
+    rightWallStartY +
+    (rightCornerBeacon.x - originBeacon.x) * SIX_FLOOR_PIXELS_PER_METER;
 
-  return {
-    sourceOrigin,
-    mapOriginPx,
-    rotationRadians: mapAngle - sourceAngle,
-  };
-}
+  return (beacon: BeaconLike) => {
+    if (sixFloorTopWallBeaconNames.has(beacon.name)) {
+      return mapPxToPercent({
+        x:
+          referencePx.x +
+          (beacon.y - referenceBeacon.y) * SIX_FLOOR_PIXELS_PER_METER,
+        y: topWallY,
+      });
+    }
 
-function applyScaledNormalization(
-  sourcePoint: MapPoint,
-  transform: ScaledTransform
-): MapPoint | null {
-  const dx = sourcePoint.x - transform.sourceOrigin.x;
-  const dy = sourcePoint.y - transform.sourceOrigin.y;
-  const cos = Math.cos(transform.rotationRadians);
-  const sin = Math.sin(transform.rotationRadians);
-  const mapPixelPoint = {
-    x:
-      transform.mapOriginPx.x +
-      SIX_FLOOR_PIXELS_PER_METER * (dx * cos - dy * sin),
-    y:
-      transform.mapOriginPx.y +
-      SIX_FLOOR_PIXELS_PER_METER * (dx * sin + dy * cos),
-  };
+    if (sixFloorRightWallBeaconNames.has(beacon.name)) {
+      return mapPxToPercent({
+        x: rightWallX,
+        y:
+          rightWallStartY +
+          (rightCornerBeacon.x - beacon.x) * SIX_FLOOR_PIXELS_PER_METER,
+      });
+    }
 
-  return mapPxToPercent(mapPixelPoint);
+    if (sixFloorBottomWallBeaconNames.has(beacon.name)) {
+      return mapPxToPercent({
+        x:
+          bottomOriginX +
+          (beacon.y - originBeacon.y) * SIX_FLOOR_PIXELS_PER_METER,
+        y: bottomWallY,
+      });
+    }
+
+    return null;
+  };
 }
 
 export function buildSixFloorNavigationBeaconMarkers(
@@ -498,18 +492,15 @@ export function buildSixFloorNavigationBeaconMarkers(
     sixFloorNavigationBeaconNames.has(beacon.name)
   );
   const byName = new Map(sixFloorBeacons.map((beacon) => [beacon.name, beacon]));
-  const transform = buildScaledSixFloorTransform(byName);
+  const projectToWall = buildSnappedSixFloorWallProjection(byName);
 
-  if (!transform) {
+  if (!projectToWall) {
     return [];
   }
 
   return sixFloorBeacons
     .map((beacon) => {
-      const mapPoint = applyScaledNormalization(
-        point(beacon.x, beacon.y),
-        transform
-      );
+      const mapPoint = projectToWall(beacon);
 
       if (!mapPoint) {
         return null;
