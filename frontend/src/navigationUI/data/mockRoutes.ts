@@ -18,13 +18,13 @@ export interface RoutePosition {
 }
 
 export const boelterDemoRoute: NavigationRoute = {
-  id: 'boelter-5249-to-engineering-library',
-  name: 'Boelter 5249 to Engineering Library',
+  id: 'boelter-6266-to-engineering-library',
+  name: 'Boelter 6266 Suite to Engineering Library',
   segments: [
     {
-      floor: '5F',
+      floor: '6F',
       points: [
-        {x: 77.5, y: 18.1},
+        {x: 87.5, y: 18.1},
         {x: 82.0, y: 18.1},
         {x: 82.0, y: 25.6},
         {x: 76.2, y: 25.6},

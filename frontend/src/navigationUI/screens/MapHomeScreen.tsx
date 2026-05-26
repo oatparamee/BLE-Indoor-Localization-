@@ -114,7 +114,7 @@ export function MapHomeScreen({
   const canStartNavigation = Boolean(source && destination);
   const [hasSearchedRooms, setHasSearchedRooms] = React.useState(false);
   const [floorMenuOpen, setFloorMenuOpen] = React.useState(false);
-  const floors: FloorCode[] = ['5F', '8F'];
+  const floors: FloorCode[] = ['6F', '8F'];
 
   React.useEffect(() => {
     if (searchIsActive) {
@@ -161,7 +161,7 @@ export function MapHomeScreen({
         floor={selectedFloor}
         currentAnchor={currentAnchor}
         destination={destination}
-        zoneName="Boelter 5F to 8F"
+        zoneName="Boelter 6F to 8F"
         showRooms
         isNavigating={isNavigating}
         routeProgress={routeProgress}
