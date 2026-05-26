@@ -14,18 +14,20 @@ import {
   FloorCode,
   IndoorDestination,
   MapPoint,
+  NavigationBeaconMarker,
 } from '../data/mockIndoorDestinations';
 import {getRouteSegmentForFloor} from '../data/mockRoutes';
 import type {NavigationRoute, RoutePosition} from '../data/mockRoutes';
 import { radii } from '../theme/tokens';
 import Boelter6FMap from '../../assets/maps/boelter-6f.svg';
 import Boelter8FMap from '../../assets/maps/boelter-8f.svg';
-import Svg, {Circle, G, Path, Polygon} from 'react-native-svg';
+import Svg, {Circle, G, Path, Polygon, Text as SvgText} from 'react-native-svg';
 
 interface Props {
   floor: FloorCode;
   currentAnchor: CurrentAnchor;
   destination: IndoorDestination | null;
+  beaconMarkers?: NavigationBeaconMarker[];
   zoneName: string;
   showRooms?: boolean;
   isNavigating: boolean;
@@ -165,6 +167,7 @@ function getDampedRotationDelta(angleDelta: number) {
 }
 
 export function IndoorMapPlaceholder({
+  beaconMarkers = [],
   floor,
   isNavigating,
   navigationRoute = null,
@@ -231,6 +234,7 @@ export function IndoorMapPlaceholder({
     routePosition?.headingRadians === undefined
       ? 0
       : (routePosition.headingRadians * 180) / Math.PI;
+  const visibleBeaconMarkers = beaconMarkers.filter((marker) => marker.floor === floor);
 
   const updateViewState = useCallback((nextViewState: MapViewState) => {
     viewStateRef.current = nextViewState;
@@ -504,6 +508,46 @@ export function IndoorMapPlaceholder({
                 />
               </G>
             ) : null}
+          </Svg>
+        ) : null}
+        {visibleBeaconMarkers.length > 0 ? (
+          <Svg
+            height={renderedMapHeight}
+            pointerEvents="none"
+            style={styles.routeOverlay}
+            width={renderedMapWidth}
+          >
+            {visibleBeaconMarkers.map((marker) => {
+              const renderedPoint = getRenderedMapPoint(marker.point);
+
+              return (
+                <G key={marker.id}>
+                  <Circle
+                    cx={renderedPoint.x}
+                    cy={renderedPoint.y}
+                    fill="#0F766E"
+                    r={18}
+                    stroke="#FFFFFF"
+                    strokeWidth={6}
+                  />
+                  <Circle
+                    cx={renderedPoint.x}
+                    cy={renderedPoint.y}
+                    fill="#A7F3D0"
+                    r={7}
+                  />
+                  <SvgText
+                    fill="#164E63"
+                    fontSize={26}
+                    fontWeight="700"
+                    x={renderedPoint.x + 22}
+                    y={renderedPoint.y - 14}
+                  >
+                    {marker.label}
+                  </SvgText>
+                </G>
+              );
+            })}
           </Svg>
         ) : null}
       </View>

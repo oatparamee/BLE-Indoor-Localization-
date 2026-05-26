@@ -31,17 +31,28 @@ TOP_K_DEFAULT = 4
 # nearest cell so neighbouring cells still contribute meaningfully.
 DISTANCE_EPSILON = 1e-6
 
+# A cell-beacon entry with fewer than this many samples is treated as
+# "not heard" at match time (i.e. floor-substituted), because the
+# `mean` of a handful of readings isn't a stable estimate. Standard
+# error of the mean is σ/√n: at σ≈3 dB and n=10 that's ±0.95 dB —
+# small enough to trust the mean; at n=1 it's ±3 dB, just noise.
+MIN_SAMPLES_DEFAULT = 10
+
 
 def match(
     store,
     rssi_vector: dict,
     top_k: int = TOP_K_DEFAULT,
+    min_samples: int = MIN_SAMPLES_DEFAULT,
 ) -> Optional[dict]:
     """Return the best-estimate (x, y) plus the top-K nearest cells.
 
     store: FingerprintStore
     rssi_vector: {beacon_id: float|None} — current observation.
         Unknown beacons are ignored; None values are floor-substituted.
+    min_samples: cells whose entry for a given beacon has fewer than
+        `min_samples` samples are treated as "not heard" for that
+        beacon — same as if the survey had not recorded it.
     """
     return match_cells(
         cells=store.list_cells(),
@@ -49,6 +60,7 @@ def match(
         floor_rssi=store.floor_rssi(),
         known_beacons=store.known_beacons(),
         top_k=top_k,
+        min_samples=min_samples,
     )
 
 
@@ -58,6 +70,7 @@ def match_cells(
     floor_rssi: Optional[float],
     known_beacons,
     top_k: int = TOP_K_DEFAULT,
+    min_samples: int = MIN_SAMPLES_DEFAULT,
 ) -> Optional[dict]:
     """Lower-level matcher operating on a precomputed cell list.
 
@@ -75,6 +88,7 @@ def match_cells(
     known_bids = sorted(set(known_beacons))
     if not known_bids:
         return None
+    min_n = max(1, int(min_samples))
 
     scored = []
     for cell in cells:
@@ -82,6 +96,15 @@ def match_cells(
         cell_beacons = cell.get("beacons", {})
         for bid in known_bids:
             entry = cell_beacons.get(bid)
+            # Demote low-confidence entries to "not heard": if the cell
+            # has fewer than min_n samples for this beacon, its `mean`
+            # isn't a stable estimate, so treat it as missing and use
+            # the floor — exactly like an entry that's already None.
+            if (
+                isinstance(entry, dict)
+                and int(entry.get("n", 0)) < min_n
+            ):
+                entry = None
             mu = float(entry["mean"]) if isinstance(entry, dict) else floor
 
             z = rssi_vector.get(bid)

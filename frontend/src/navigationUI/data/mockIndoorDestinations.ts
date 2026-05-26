@@ -39,6 +39,13 @@ export interface CurrentAnchor {
   point: MapPoint;
 }
 
+export interface NavigationBeaconMarker {
+  id: string;
+  label: string;
+  floor: FloorCode;
+  point: MapPoint;
+}
+
 export const prototypeMaps: PrototypeMapZone[] = [
   {
     id: 'boelter-6f-8f-demo',
@@ -366,3 +373,46 @@ export const fallbackAnchor: CurrentAnchor = {
   floor: '6F',
   point: { x: 78, y: 32 },
 };
+
+const sixFloorNavigationBeaconPoints: Record<string, MapPoint> = {
+  // User-confirmed 6F placements on the real navigation map.
+  BCPro_1: point(21, 12),
+  BCPro_3: point(37, 14),
+  BCPro_6: point(52, 14),
+  BCPro_0: point(66, 14),
+  BCPro_7: point(78, 15),
+  BCPro_10: point(81, 29),
+  BCPro_5: point(81, 43),
+  BCPro_9: point(81, 58),
+  BCPro_17: point(81, 74),
+  BCPro_18: point(78, 90),
+  BCPro_67: point(63, 90),
+  BCPro_19: point(45, 90),
+  BCPro_15: point(24, 96),
+};
+
+interface BeaconLike {
+  id: string;
+  name: string;
+}
+
+export function buildSixFloorNavigationBeaconMarkers(
+  beacons: BeaconLike[]
+): NavigationBeaconMarker[] {
+  return beacons
+    .map((beacon) => {
+      const mapPoint = sixFloorNavigationBeaconPoints[beacon.name];
+
+      if (!mapPoint) {
+        return null;
+      }
+
+      return {
+        id: beacon.id,
+        label: beacon.name,
+        floor: '6F' as const,
+        point: mapPoint,
+      };
+    })
+    .filter((marker): marker is NavigationBeaconMarker => marker !== null);
+}

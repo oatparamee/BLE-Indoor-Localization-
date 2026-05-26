@@ -14,6 +14,7 @@ import {
   CurrentAnchor,
   FloorCode,
   IndoorDestination,
+  NavigationBeaconMarker,
   PrototypeMapZone,
 } from '../data/mockIndoorDestinations';
 import type {NavigationRoute, RoutePosition} from '../data/mockRoutes';
@@ -64,6 +65,7 @@ interface Props {
   roomResults: IndoorDestination[];
   quickRooms: IndoorDestination[];
   currentAnchor: CurrentAnchor;
+  beaconMarkers: NavigationBeaconMarker[];
   source: IndoorDestination | null;
   destination: IndoorDestination | null;
   selectedFloor: FloorCode;
@@ -92,6 +94,7 @@ export function MapHomeScreen({
   onChangeRoomSearchQuery,
   roomResults,
   currentAnchor,
+  beaconMarkers,
   source,
   destination,
   selectedFloor,
@@ -161,6 +164,7 @@ export function MapHomeScreen({
         floor={selectedFloor}
         currentAnchor={currentAnchor}
         destination={destination}
+        beaconMarkers={beaconMarkers}
         zoneName="Boelter 6F to 8F"
         showRooms
         isNavigating={isNavigating}

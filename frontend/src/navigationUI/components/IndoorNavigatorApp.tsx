@@ -1,4 +1,4 @@
-import React, { useDeferredValue, useMemo, useState } from 'react';
+import React, { useDeferredValue, useEffect, useMemo, useState } from 'react';
 import {
   SafeAreaView,
   StatusBar,
@@ -6,16 +6,18 @@ import {
   View,
 } from 'react-native';
 import {
-  beaconAnchors,
+  buildSixFloorNavigationBeaconMarkers,
   fallbackAnchor,
   FloorCode,
   indoorDestinations,
+  NavigationBeaconMarker,
   prototypeMaps,
 } from '../data/mockIndoorDestinations';
 import {
   boelterDemoRoute,
   getRoutePositionAtProgress,
 } from '../data/mockRoutes';
+import { loadBeaconConfig } from '../../config/beaconConfig';
 import { MapHomeScreen } from '../screens/MapHomeScreen';
 import { colors } from '../theme/tokens';
 
@@ -35,6 +37,7 @@ export function IndoorNavigatorApp() {
   const [activeStepIndex, setActiveStepIndex] = useState(0);
   const [routeProgress, setRouteProgress] = useState(0);
   const [mapFocusRequest, setMapFocusRequest] = useState(0);
+  const [beaconMarkers, setBeaconMarkers] = useState<NavigationBeaconMarker[]>([]);
   const deferredMapSearchQuery = useDeferredValue(mapSearchQuery);
   const deferredRoomSearchQuery = useDeferredValue(roomSearchQuery);
 
@@ -47,8 +50,49 @@ export function IndoorNavigatorApp() {
     []
   );
 
-  const currentAnchor = beaconAnchors['beacon-elevator-core'] ?? fallbackAnchor;
-  const statusMessage = 'BLE live navigation zones pending beacon placement.';
+  useEffect(() => {
+    let cancelled = false;
+
+    loadBeaconConfig()
+      .then((config) => {
+        if (cancelled) {
+          return;
+        }
+
+        const markers = buildSixFloorNavigationBeaconMarkers(Object.values(config));
+        setBeaconMarkers(markers);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setBeaconMarkers([]);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const currentAnchor = useMemo(() => {
+    const topLeftBeacon =
+      beaconMarkers.find((marker) => marker.label === 'BCPro_1') ??
+      beaconMarkers[0];
+
+    if (!topLeftBeacon) {
+      return fallbackAnchor;
+    }
+
+    return {
+      label: topLeftBeacon.label,
+      subtitle: '6F beacon anchor on the navigation map',
+      floor: topLeftBeacon.floor,
+      point: topLeftBeacon.point,
+    };
+  }, [beaconMarkers]);
+  const statusMessage =
+    beaconMarkers.length > 0
+      ? `Showing ${beaconMarkers.length} mapped 6F beacon anchors.`
+      : '6F beacon anchors will appear here after beacon setup loads.';
 
   const filteredMaps = useMemo(() => {
     const normalizedQuery = deferredMapSearchQuery.trim().toLowerCase();
@@ -246,6 +290,7 @@ export function IndoorNavigatorApp() {
           roomResults={filteredRooms}
           quickRooms={quickRooms}
           currentAnchor={currentAnchor}
+          beaconMarkers={beaconMarkers}
           source={visibleSource}
           destination={visibleDestination}
           selectedFloor={selectedFloor}
