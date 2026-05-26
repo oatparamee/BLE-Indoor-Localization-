@@ -377,34 +377,21 @@ export const fallbackAnchor: CurrentAnchor = {
 const SIX_FLOOR_MAP_SIZE_PX = {width: 880, height: 1080};
 const SIX_FLOOR_PIXELS_PER_METER = 802 / 72.2;
 const SIX_FLOOR_BCPRO_1_PERCENT = point(21, 12);
-const SIX_FLOOR_BCPRO_15_X_PERCENT = 24;
 
-const sixFloorTopWallBeaconNames = new Set([
+const sixFloorNavigationBeaconNames = new Set([
   'BCPro_1',
   'BCPro_3',
   'BCPro_6',
   'BCPro_0',
-]);
-
-const sixFloorRightWallBeaconNames = new Set([
   'BCPro_7',
   'BCPro_10',
   'BCPro_5',
   'BCPro_9',
   'BCPro_17',
-]);
-
-const sixFloorBottomWallBeaconNames = new Set([
   'BCPro_18',
   'BCPro_67',
   'BCPro_19',
   'BCPro_15',
-]);
-
-const sixFloorNavigationBeaconNames = new Set([
-  ...sixFloorTopWallBeaconNames,
-  ...sixFloorRightWallBeaconNames,
-  ...sixFloorBottomWallBeaconNames,
 ]);
 
 interface BeaconLike {
@@ -412,6 +399,11 @@ interface BeaconLike {
   name: string;
   x: number;
   y: number;
+}
+
+interface AxisAlignedTransform {
+  sourceReference: MapPoint;
+  mapReferencePx: MapPoint;
 }
 
 function percentToMapPx(percentPoint: MapPoint): MapPoint {
@@ -428,61 +420,37 @@ function mapPxToPercent(pixelPoint: MapPoint): MapPoint {
   };
 }
 
-function buildSnappedSixFloorWallProjection(
+function buildAxisAlignedSixFloorTransform(
   byName: Map<string, BeaconLike>
-): ((beacon: BeaconLike) => MapPoint | null) | null {
-  const originBeacon = byName.get('BCPro_15');
+): AxisAlignedTransform | null {
   const referenceBeacon = byName.get('BCPro_1');
-  const rightCornerBeacon = byName.get('BCPro_7');
 
-  if (!originBeacon || !referenceBeacon || !rightCornerBeacon) {
+  if (!referenceBeacon) {
     return null;
   }
 
-  const referencePx = percentToMapPx(SIX_FLOOR_BCPRO_1_PERCENT);
-  const bottomOriginX =
-    (SIX_FLOOR_BCPRO_15_X_PERCENT / 100) * SIX_FLOOR_MAP_SIZE_PX.width;
-  const topWallY = referencePx.y;
-  const rightWallX =
-    referencePx.x +
-    (rightCornerBeacon.y - referenceBeacon.y) * SIX_FLOOR_PIXELS_PER_METER;
-  const rightWallStartY =
-    referencePx.y +
-    (referenceBeacon.x - rightCornerBeacon.x) * SIX_FLOOR_PIXELS_PER_METER;
-  const bottomWallY =
-    rightWallStartY +
-    (rightCornerBeacon.x - originBeacon.x) * SIX_FLOOR_PIXELS_PER_METER;
-
-  return (beacon: BeaconLike) => {
-    if (sixFloorTopWallBeaconNames.has(beacon.name)) {
-      return mapPxToPercent({
-        x:
-          referencePx.x +
-          (beacon.y - referenceBeacon.y) * SIX_FLOOR_PIXELS_PER_METER,
-        y: topWallY,
-      });
-    }
-
-    if (sixFloorRightWallBeaconNames.has(beacon.name)) {
-      return mapPxToPercent({
-        x: rightWallX,
-        y:
-          rightWallStartY +
-          (rightCornerBeacon.x - beacon.x) * SIX_FLOOR_PIXELS_PER_METER,
-      });
-    }
-
-    if (sixFloorBottomWallBeaconNames.has(beacon.name)) {
-      return mapPxToPercent({
-        x:
-          bottomOriginX +
-          (beacon.y - originBeacon.y) * SIX_FLOOR_PIXELS_PER_METER,
-        y: bottomWallY,
-      });
-    }
-
-    return null;
+  return {
+    sourceReference: point(referenceBeacon.x, referenceBeacon.y),
+    mapReferencePx: percentToMapPx(SIX_FLOOR_BCPRO_1_PERCENT),
   };
+}
+
+function applyAxisAlignedNormalization(
+  sourcePoint: MapPoint,
+  transform: AxisAlignedTransform
+): MapPoint | null {
+  const mapPixelPoint = {
+    x:
+      transform.mapReferencePx.x +
+      (sourcePoint.y - transform.sourceReference.y) *
+        SIX_FLOOR_PIXELS_PER_METER,
+    y:
+      transform.mapReferencePx.y +
+      (transform.sourceReference.x - sourcePoint.x) *
+        SIX_FLOOR_PIXELS_PER_METER,
+  };
+
+  return mapPxToPercent(mapPixelPoint);
 }
 
 export function buildSixFloorNavigationBeaconMarkers(
@@ -492,15 +460,18 @@ export function buildSixFloorNavigationBeaconMarkers(
     sixFloorNavigationBeaconNames.has(beacon.name)
   );
   const byName = new Map(sixFloorBeacons.map((beacon) => [beacon.name, beacon]));
-  const projectToWall = buildSnappedSixFloorWallProjection(byName);
+  const transform = buildAxisAlignedSixFloorTransform(byName);
 
-  if (!projectToWall) {
+  if (!transform) {
     return [];
   }
 
   return sixFloorBeacons
     .map((beacon) => {
-      const mapPoint = projectToWall(beacon);
+      const mapPoint = applyAxisAlignedNormalization(
+        point(beacon.x, beacon.y),
+        transform
+      );
 
       if (!mapPoint) {
         return null;
