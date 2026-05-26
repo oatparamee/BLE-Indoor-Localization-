@@ -24,12 +24,12 @@ export function IndoorNavigatorApp() {
   const [mapSearchQuery, setMapSearchQuery] = useState('');
   const [roomSearchQuery, setRoomSearchQuery] = useState('');
   const [selectedMapId, setSelectedMapId] = useState<string | null>(defaultMap?.id ?? null);
-  const [selectedSourceId, setSelectedSourceId] = useState<string | null>('boelter-5249');
+  const [selectedSourceId, setSelectedSourceId] = useState<string | null>('boelter-6266-suite');
   const [selectedDestinationId, setSelectedDestinationId] = useState<string | null>(
     'engineering-library'
   );
   const [selectedFloor, setSelectedFloor] = useState<FloorCode>(
-    defaultMap?.defaultFloor ?? '5F'
+    defaultMap?.defaultFloor ?? '6F'
   );
   const [isNavigating, setIsNavigating] = useState(false);
   const [activeStepIndex, setActiveStepIndex] = useState(0);
@@ -141,7 +141,7 @@ export function IndoorNavigatorApp() {
     setSelectedMapId(null);
     setSelectedSourceId(null);
     setSelectedDestinationId(null);
-    setSelectedFloor(defaultMap?.defaultFloor ?? '5F');
+    setSelectedFloor(defaultMap?.defaultFloor ?? '6F');
     setMapSearchQuery('');
     setRoomSearchQuery('');
     setIsNavigating(false);

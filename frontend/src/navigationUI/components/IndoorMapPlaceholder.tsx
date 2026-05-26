@@ -18,7 +18,7 @@ import {
 import {getRouteSegmentForFloor} from '../data/mockRoutes';
 import type {NavigationRoute, RoutePosition} from '../data/mockRoutes';
 import { radii } from '../theme/tokens';
-import Boelter5FMap from '../../assets/maps/boelter-5f.svg';
+import Boelter6FMap from '../../assets/maps/boelter-6f.svg';
 import Boelter8FMap from '../../assets/maps/boelter-8f.svg';
 import Svg, {Circle, G, Path, Polygon} from 'react-native-svg';
 
@@ -52,12 +52,12 @@ const ROUTE_STROKE_WIDTH = 18;
 const ROUTE_ARROW_SIZE = 50;
 
 const floorMapComponents = {
-  '5F': Boelter5FMap,
+  '6F': Boelter6FMap,
   '8F': Boelter8FMap,
 };
 
 const floorMapAspectRatios: Record<FloorCode, number> = {
-  '5F': 880 / 1080,
+  '6F': 880 / 1080,
   '8F': 880 / 1080,
 };
 

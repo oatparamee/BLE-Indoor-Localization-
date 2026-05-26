@@ -1,4 +1,4 @@
-export type FloorCode = '5F' | '8F';
+export type FloorCode = '6F' | '8F';
 
 export interface MapPoint {
   x: number;
@@ -41,10 +41,10 @@ export interface CurrentAnchor {
 
 export const prototypeMaps: PrototypeMapZone[] = [
   {
-    id: 'boelter-5f-8f-demo',
-    name: 'Boelter 5F to 8F',
+    id: 'boelter-6f-8f-demo',
+    name: 'Boelter 6F to 8F',
     subtitle: 'Created floor maps for room, elevator, stairwell, and library testing',
-    defaultFloor: '5F',
+    defaultFloor: '6F',
   },
 ];
 
@@ -56,7 +56,7 @@ interface DestinationOptions {
   quickAccess?: boolean;
 }
 
-const demoMapId = 'boelter-5f-8f-demo';
+const demoMapId = 'boelter-6f-8f-demo';
 
 const point = (x: number, y: number): MapPoint => ({ x, y });
 
@@ -122,114 +122,121 @@ const stairwell = (
 ) => createDestination(name, floor, 'Stairwell', mapPoint, options);
 
 export const indoorDestinations: IndoorDestination[] = [
-  room('5651', '5F', point(8, 15)),
-  room('5667', '5F', point(8, 30)),
-  room('5801', '5F', point(8, 47)),
-  room('5805', '5F', point(8, 59)),
-  room('5818', '5F', point(8, 69)),
-  room('5819', '5F', point(8, 79)),
-  room('5766', '5F', point(8, 94)),
-  room('5764', '5F', point(16, 94)),
-  room('5756', '5F', point(23, 92), {
-    subtitle: '5F small room by the lower restroom',
+  room('6631', '6F', point(8, 15)),
+  room('6564', '6F', point(9, 30)),
+  room('6673', '6F', point(8, 40)),
+  room('6672', '6F', point(22, 40)),
+  room('6679', '6F', point(5, 49)),
+  room('6689', '6F', point(5, 58)),
+  room('6805', '6F', point(5, 67)),
+  room('6807', '6F', point(5, 76)),
+  room('6815', '6F', point(6, 84)),
+  room('6763 Suite', '6F', point(8, 91), {
+    subtitle: '6F suite along the southwest corridor',
   }),
-  room('5750', '5F', point(29, 94)),
-  room('5549', '5F', point(28, 13)),
-  room('5531 Suite', '5F', point(48, 13), {
-    subtitle: '5F suite along the north corridor',
+  room('6817', '6F', point(8, 97)),
+  room('6818', '6F', point(22, 88)),
+  room('6557', '6F', point(20, 13)),
+  room('6549', '6F', point(28, 13)),
+  room('6541', '6F', point(48, 13), {
+    subtitle: '6F room along the north corridor',
   }),
-  room('5513', '5F', point(68, 13)),
-  room('5249', '5F', point(78, 13), {
-    id: 'boelter-5249',
-    subtitle: '5F room near the northeast corridor',
+  room('6535', '6F', point(58, 13)),
+  room('6531', '6F', point(64, 13)),
+  room('6513', '6F', point(70, 13)),
+  room('6505', '6F', point(78, 13)),
+  room('6266 Suite', '6F', point(90, 20), {
+    id: 'boelter-6266-suite',
+    subtitle: '6F suite beside the northeast elevator corridor',
     quickAccess: true,
   }),
-  room('5252', '5F', point(90, 13)),
-  room('5532 Suite', '5F', point(47, 25), {
-    subtitle: '5F suite along the inner north corridor',
+  room('6532 Suite', '6F', point(47, 25), {
+    subtitle: '6F suite along the inner north corridor',
   }),
-  room('5514', '5F', point(68, 25)),
-  room('5506', '5F', point(74, 25)),
-  room('5264', '5F', point(90, 25)),
-  room('5272', '5F', point(90, 33)),
-  room('5280', '5F', point(90, 41)),
-  room('5284', '5F', point(86, 46)),
-  room('5288', '5F', point(86, 50)),
-  room('5662', '5F', point(18, 25)),
-  room('5664', '5F', point(18, 29)),
-  room('5668', '5F', point(22, 35)),
-  room('5800', '5F', point(22, 47)),
-  room('5802', '5F', point(22, 58)),
-  room('5806', '5F', point(22, 66)),
-  room('5824', '5F', point(22, 76)),
-  room('5832', '5F', point(20, 82)),
-  room('5731 Suite', '5F', point(48, 83), {
-    subtitle: '5F suite along the south inner corridor',
+  room('6514', '6F', point(68, 25)),
+  room('6506', '6F', point(74, 25)),
+  room('6270', '6F', point(90, 39)),
+  room('6288 Suite', '6F', point(90, 58), {
+    subtitle: '6F suite along the east corridor',
   }),
-  room('5713', '5F', point(68, 83)),
-  room('5705', '5F', point(73, 87)),
-  room('5436', '5F', point(91, 84)),
-  room('5732 Suite', '5F', point(48, 94), {
-    subtitle: '5F suite along the lower south corridor',
+  room('6408', '6F', point(86, 66)),
+  room('6412 Suite', '6F', point(90, 71), {
+    subtitle: '6F suite along the southeast corridor',
   }),
-  room('5714', '5F', point(68, 94)),
-  room('5704', '5F', point(78, 94)),
-  room('5440', '5F', point(89, 94)),
-  room('5271', '5F', point(77, 34)),
-  room('5273', '5F', point(76, 40)),
-  room('5289 Suite', '5F', point(76, 48)),
-  room('5401', '5F', point(73, 53)),
-  room('5403', '5F', point(73, 56)),
-  room('5405', '5F', point(74, 60)),
-  room('5409', '5F', point(74, 63)),
-  room('5419', '5F', point(75, 72)),
-  room('5421', '5F', point(77, 76)),
-  room('5408', '5F', point(87, 60)),
-  room('5412', '5F', point(87, 63)),
-  room('5420', '5F', point(89, 72)),
-  room('5422', '5F', point(89, 80)),
-  amenity('5F Women\'s Restroom 1', '5F', point(20, 11), {
-    subtitle: 'Women\'s restroom near room 5549',
+  room('6678', '6F', point(22, 53)),
+  room('6802', '6F', point(22, 64)),
+  room('6820', '6F', point(22, 75)),
+  room('6271', '6F', point(77, 34)),
+  room('6275', '6F', point(76, 38)),
+  room('6279', '6F', point(76, 43)),
+  room('6291 Suite', '6F', point(76, 58), {
+    subtitle: '6F suite along the east interior corridor',
   }),
-  amenity('5F Restroom near 5271', '5F', point(76, 33), {
-    subtitle: 'Restroom beside Stairs 2 and room 5271',
+  room('6415', '6F', point(78, 74)),
+  room('6417', '6F', point(76, 80)),
+  room('6421', '6F', point(77, 84)),
+  room('6731 Suite', '6F', point(48, 92), {
+    subtitle: '6F suite along the south inner corridor',
   }),
-  amenity('5F Women\'s Restroom 3', '5F', point(78, 77), {
+  room('6713', '6F', point(68, 92)),
+  room('6729', '6F', point(49, 92)),
+  room('6723', '6F', point(55, 92)),
+  room('6707', '6F', point(76, 92)),
+  room('6426 Suite', '6F', point(90, 89), {
+    subtitle: '6F suite along the lower east corridor',
+  }),
+  room('6764', '6F', point(16, 96)),
+  room('6756', '6F', point(24, 96)),
+  room('6750', '6F', point(29, 96)),
+  room('6730 Suite', '6F', point(48, 96), {
+    subtitle: '6F suite along the lower south corridor',
+  }),
+  room('6726', '6F', point(62, 96)),
+  room('6722', '6F', point(69, 96)),
+  room('6714', '6F', point(68, 96)),
+  room('6704 Suite', '6F', point(78, 96)),
+  room('6440', '6F', point(89, 96)),
+  amenity('6F Women\'s Restroom 1', '6F', point(20, 10), {
+    subtitle: 'Women\'s restroom near room 6557',
+  }),
+  amenity('6F Men\'s Restroom', '6F', point(76, 32), {
+    subtitle: 'Men\'s restroom beside Stairs 2 and room 6271',
+  }),
+  amenity('6F Women\'s Restroom 3', '6F', point(78, 86), {
     subtitle: 'Women\'s restroom near Stairs 3',
   }),
-  amenity('5F South Restroom', '5F', point(24, 93), {
-    subtitle: 'Restroom near room 5756',
+  amenity('6F Restroom 4', '6F', point(24, 96), {
+    subtitle: 'Restroom near room 6756',
   }),
-  amenity('SEAS Cafe', '5F', point(28, 55), {
-    subtitle: 'Cafe along the 5F west interior corridor',
-  }),
-  elevator('5F Elevator 1', '5F', point(18, 23), {
+  elevator('6F Elevator 1', '6F', point(18, 23), {
     subtitle: 'Elevator beside Stairs 1',
   }),
-  stairwell('5F Stairs 1', '5F', point(22, 25), {
-    subtitle: 'Stairwell by rooms 5662 and 5664',
+  stairwell('6F Stairs 1', '6F', point(22, 25), {
+    subtitle: 'Stairwell by rooms 6564 and 6672',
   }),
-  elevator('5F Elevator 2', '5F', point(77, 24), {
-    id: '5f-elevator-2',
-    subtitle: 'Elevator at the 5F northeast vertical shaft',
+  elevator('6F Elevator 2', '6F', point(77, 24), {
+    id: '6f-elevator-2',
+    subtitle: 'Elevator at the 6F northeast vertical shaft',
     quickAccess: true,
   }),
-  stairwell('5F Stairs 2', '5F', point(76, 27), {
-    id: '5f-stairs-2',
-    subtitle: 'Stairwell near rooms 5506 and 5271',
+  stairwell('6F Stairs 2', '6F', point(76, 27), {
+    id: '6f-stairs-2',
+    subtitle: 'Stairwell near rooms 6506 and 6271',
     quickAccess: true,
   }),
-  stairwell('5F Stairs 3', '5F', point(76, 82), {
-    subtitle: 'Stairwell near rooms 5705 and 5713',
+  stairwell('6F Stairs 3', '6F', point(76, 91), {
+    subtitle: 'Stairwell near rooms 6713 and 6421',
   }),
-  elevator('5F Elevator 3', '5F', point(78, 86), {
+  elevator('6F Elevator 3', '6F', point(78, 92), {
+    id: '6f-elevator-3',
     subtitle: 'Elevator beside Stairs 3',
   }),
-  elevator('5F Elevator 4', '5F', point(18, 87), {
+  elevator('6F Elevator 4', '6F', point(18, 88), {
+    id: '6f-elevator-4',
     subtitle: 'Elevator beside Stairs 4',
   }),
-  stairwell('5F Stairs 4', '5F', point(23, 83), {
-    subtitle: 'Stairwell near room 5832',
+  stairwell('6F Stairs 4', '6F', point(23, 96), {
+    subtitle: 'Stairwell near room 6818',
   }),
   room('8500', '8F', point(47, 31)),
   room('8251', '8F', point(70, 31), {
@@ -302,15 +309,15 @@ export const favoritePlaces: SavedPlace[] = [
   },
   {
     id: 'favorite-2',
-    destinationId: 'boelter-5249',
-    note: 'Potential 5F start room',
+    destinationId: 'boelter-6266-suite',
+    note: 'Potential 6F start room',
   },
 ];
 
 export const recentPlaces: SavedPlace[] = [
   {
     id: 'recent-1',
-    destinationId: '5f-elevator-2',
+    destinationId: '6f-elevator-2',
     note: 'Vertical transition candidate',
   },
   {
@@ -322,21 +329,21 @@ export const recentPlaces: SavedPlace[] = [
 
 export const beaconAnchors: Record<string, CurrentAnchor> = {
   'beacon-lobby-north': {
-    label: '5F Northeast Hall',
-    subtitle: 'Fallback zone near 5249 and Elevator 2',
-    floor: '5F',
+    label: '6F Northeast Hall',
+    subtitle: 'Fallback zone near 6266 Suite and Elevator 2',
+    floor: '6F',
     point: { x: 78, y: 32 },
   },
   'beacon-elevator-core': {
-    label: '5F Elevator 2',
+    label: '6F Elevator 2',
     subtitle: 'Vertical transition zone',
-    floor: '5F',
+    floor: '6F',
     point: { x: 77, y: 33 },
   },
   'esp32-west-hall': {
-    label: '5F West Hall',
+    label: '6F West Hall',
     subtitle: 'Approximate west corridor zone',
-    floor: '5F',
+    floor: '6F',
     point: { x: 16, y: 44 },
   },
   'beacon-stairwell': {
@@ -354,8 +361,8 @@ export const beaconAnchors: Record<string, CurrentAnchor> = {
 };
 
 export const fallbackAnchor: CurrentAnchor = {
-  label: '5F Northeast Hall',
+  label: '6F Northeast Hall',
   subtitle: 'Waiting for the strongest BLE signal',
-  floor: '5F',
+  floor: '6F',
   point: { x: 78, y: 32 },
 };
