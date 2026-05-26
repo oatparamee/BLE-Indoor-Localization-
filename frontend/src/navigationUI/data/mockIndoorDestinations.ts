@@ -377,6 +377,7 @@ export const fallbackAnchor: CurrentAnchor = {
 const SIX_FLOOR_MAP_SIZE_PX = {width: 880, height: 1080};
 const SIX_FLOOR_PIXELS_PER_METER = 802 / 72.2;
 const SIX_FLOOR_BCPRO_1_PERCENT = point(21, 12);
+const SIX_FLOOR_BEACON_OFFSET_METERS = {x: -4.5, y: 1.5};
 
 const sixFloorNavigationBeaconNames = new Set([
   'BCPro_1',
@@ -443,11 +444,13 @@ function applyAxisAlignedNormalization(
     x:
       transform.mapReferencePx.x +
       (sourcePoint.y - transform.sourceReference.y) *
-        SIX_FLOOR_PIXELS_PER_METER,
+        SIX_FLOOR_PIXELS_PER_METER +
+      SIX_FLOOR_BEACON_OFFSET_METERS.x * SIX_FLOOR_PIXELS_PER_METER,
     y:
       transform.mapReferencePx.y +
       (transform.sourceReference.x - sourcePoint.x) *
-        SIX_FLOOR_PIXELS_PER_METER,
+        SIX_FLOOR_PIXELS_PER_METER +
+      SIX_FLOOR_BEACON_OFFSET_METERS.y * SIX_FLOOR_PIXELS_PER_METER,
   };
 
   return mapPxToPercent(mapPixelPoint);
