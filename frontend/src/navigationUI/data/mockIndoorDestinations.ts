@@ -374,11 +374,26 @@ export const fallbackAnchor: CurrentAnchor = {
   point: { x: 78, y: 32 },
 };
 
-const sixFloorNavigationControlPoints: Record<string, MapPoint> = {
-  BCPro_1: point(21, 12),
-  BCPro_15: point(24, 96),
-  BCPro_7: point(78, 15),
-};
+const SIX_FLOOR_MAP_SIZE_PX = {width: 880, height: 1080};
+const SIX_FLOOR_PIXELS_PER_METER = 802 / 72.2;
+const SIX_FLOOR_BCPRO_1_PERCENT = point(21, 12);
+const SIX_FLOOR_BCPRO_15_X_PERCENT = 24;
+
+const sixFloorNavigationBeaconNames = new Set([
+  'BCPro_1',
+  'BCPro_3',
+  'BCPro_6',
+  'BCPro_0',
+  'BCPro_7',
+  'BCPro_10',
+  'BCPro_5',
+  'BCPro_9',
+  'BCPro_17',
+  'BCPro_18',
+  'BCPro_67',
+  'BCPro_19',
+  'BCPro_15',
+]);
 
 interface BeaconLike {
   id: string;
@@ -387,80 +402,113 @@ interface BeaconLike {
   y: number;
 }
 
-interface NormalizationAnchor {
-  source: MapPoint;
-  target: MapPoint;
+interface ScaledTransform {
+  sourceOrigin: MapPoint;
+  mapOriginPx: MapPoint;
+  rotationRadians: number;
 }
 
-function applyAffineNormalization(
-  sourcePoint: MapPoint,
-  anchors: [NormalizationAnchor, NormalizationAnchor, NormalizationAnchor]
-): MapPoint | null {
-  const [a, b, c] = anchors;
-  const denominator =
-    (b.source.y - c.source.y) * (a.source.x - c.source.x) +
-    (c.source.x - b.source.x) * (a.source.y - c.source.y);
+function percentToMapPx(percentPoint: MapPoint): MapPoint {
+  return {
+    x: (percentPoint.x / 100) * SIX_FLOOR_MAP_SIZE_PX.width,
+    y: (percentPoint.y / 100) * SIX_FLOOR_MAP_SIZE_PX.height,
+  };
+}
 
-  if (Math.abs(denominator) < 1e-6) {
+function mapPxToPercent(pixelPoint: MapPoint): MapPoint {
+  return {
+    x: (pixelPoint.x / SIX_FLOOR_MAP_SIZE_PX.width) * 100,
+    y: (pixelPoint.y / SIX_FLOOR_MAP_SIZE_PX.height) * 100,
+  };
+}
+
+function buildScaledSixFloorTransform(
+  byName: Map<string, BeaconLike>
+): ScaledTransform | null {
+  const originBeacon = byName.get('BCPro_15');
+  const referenceBeacon = byName.get('BCPro_1');
+
+  if (!originBeacon || !referenceBeacon) {
     return null;
   }
 
-  const weightA =
-    ((b.source.y - c.source.y) * (sourcePoint.x - c.source.x) +
-      (c.source.x - b.source.x) * (sourcePoint.y - c.source.y)) /
-    denominator;
-  const weightB =
-    ((c.source.y - a.source.y) * (sourcePoint.x - c.source.x) +
-      (a.source.x - c.source.x) * (sourcePoint.y - c.source.y)) /
-    denominator;
-  const weightC = 1 - weightA - weightB;
+  const sourceOrigin = point(originBeacon.x, originBeacon.y);
+  const sourceReferenceDelta = {
+    x: referenceBeacon.x - originBeacon.x,
+    y: referenceBeacon.y - originBeacon.y,
+  };
+  const referenceDistancePx =
+    Math.hypot(sourceReferenceDelta.x, sourceReferenceDelta.y) *
+    SIX_FLOOR_PIXELS_PER_METER;
+  const referencePx = percentToMapPx(SIX_FLOOR_BCPRO_1_PERCENT);
+  const originX =
+    (SIX_FLOOR_BCPRO_15_X_PERCENT / 100) * SIX_FLOOR_MAP_SIZE_PX.width;
+  const originDeltaX = referencePx.x - originX;
+
+  if (Math.abs(originDeltaX) >= referenceDistancePx) {
+    return null;
+  }
+
+  // BCPro_15 is under BCPro_1 on the 6F map; solve y from the fixed scale.
+  const originY =
+    referencePx.y +
+    Math.sqrt(referenceDistancePx * referenceDistancePx - originDeltaX * originDeltaX);
+  const mapOriginPx = {x: originX, y: originY};
+  const mapReferenceDelta = {
+    x: referencePx.x - mapOriginPx.x,
+    y: referencePx.y - mapOriginPx.y,
+  };
+  const sourceAngle = Math.atan2(
+    sourceReferenceDelta.y,
+    sourceReferenceDelta.x
+  );
+  const mapAngle = Math.atan2(mapReferenceDelta.y, mapReferenceDelta.x);
 
   return {
-    x:
-      weightA * a.target.x +
-      weightB * b.target.x +
-      weightC * c.target.x,
-    y:
-      weightA * a.target.y +
-      weightB * b.target.y +
-      weightC * c.target.y,
+    sourceOrigin,
+    mapOriginPx,
+    rotationRadians: mapAngle - sourceAngle,
   };
+}
+
+function applyScaledNormalization(
+  sourcePoint: MapPoint,
+  transform: ScaledTransform
+): MapPoint | null {
+  const dx = sourcePoint.x - transform.sourceOrigin.x;
+  const dy = sourcePoint.y - transform.sourceOrigin.y;
+  const cos = Math.cos(transform.rotationRadians);
+  const sin = Math.sin(transform.rotationRadians);
+  const mapPixelPoint = {
+    x:
+      transform.mapOriginPx.x +
+      SIX_FLOOR_PIXELS_PER_METER * (dx * cos - dy * sin),
+    y:
+      transform.mapOriginPx.y +
+      SIX_FLOOR_PIXELS_PER_METER * (dx * sin + dy * cos),
+  };
+
+  return mapPxToPercent(mapPixelPoint);
 }
 
 export function buildSixFloorNavigationBeaconMarkers(
   beacons: BeaconLike[]
 ): NavigationBeaconMarker[] {
-  const byName = new Map(beacons.map((beacon) => [beacon.name, beacon]));
-  const anchors = Object.entries(sixFloorNavigationControlPoints).map(
-    ([name, target]) => {
-      const beacon = byName.get(name);
-
-      if (!beacon) {
-        return null;
-      }
-
-      return {
-        source: point(beacon.x, beacon.y),
-        target,
-      };
-    }
+  const sixFloorBeacons = beacons.filter((beacon) =>
+    sixFloorNavigationBeaconNames.has(beacon.name)
   );
+  const byName = new Map(sixFloorBeacons.map((beacon) => [beacon.name, beacon]));
+  const transform = buildScaledSixFloorTransform(byName);
 
-  if (anchors.some((anchor) => anchor === null)) {
+  if (!transform) {
     return [];
   }
 
-  const affineAnchors = anchors as [
-    NormalizationAnchor,
-    NormalizationAnchor,
-    NormalizationAnchor,
-  ];
-
-  return beacons
+  return sixFloorBeacons
     .map((beacon) => {
-      const mapPoint = applyAffineNormalization(
+      const mapPoint = applyScaledNormalization(
         point(beacon.x, beacon.y),
-        affineAnchors
+        transform
       );
 
       if (!mapPoint) {
