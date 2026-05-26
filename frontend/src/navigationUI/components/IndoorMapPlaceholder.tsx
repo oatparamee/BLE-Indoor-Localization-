@@ -28,6 +28,7 @@ interface Props {
   currentAnchor: CurrentAnchor;
   destination: IndoorDestination | null;
   beaconMarkers?: NavigationBeaconMarker[];
+  livePosition?: MapPoint | null;
   zoneName: string;
   showRooms?: boolean;
   isNavigating: boolean;
@@ -177,6 +178,7 @@ export function IndoorMapPlaceholder({
   focusPoint,
   focusRequest = 0,
   focusZoom = DEFAULT_FOCUS_ZOOM,
+  livePosition = null,
 }: Props) {
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const [frameSize, setFrameSize] = useState({
@@ -235,6 +237,8 @@ export function IndoorMapPlaceholder({
       ? 0
       : (routePosition.headingRadians * 180) / Math.PI;
   const visibleBeaconMarkers = beaconMarkers.filter((marker) => marker.floor === floor);
+  const livePositionPoint =
+    livePosition && floor === '6F' ? getRenderedMapPoint(livePosition) : null;
 
   const updateViewState = useCallback((nextViewState: MapViewState) => {
     viewStateRef.current = nextViewState;
@@ -548,6 +552,36 @@ export function IndoorMapPlaceholder({
                 </G>
               );
             })}
+          </Svg>
+        ) : null}
+        {livePositionPoint ? (
+          <Svg
+            height={renderedMapHeight}
+            pointerEvents="none"
+            style={styles.routeOverlay}
+            width={renderedMapWidth}
+          >
+            <Circle
+              cx={livePositionPoint.x}
+              cy={livePositionPoint.y}
+              fill="#2563EB"
+              fillOpacity={0.18}
+              r={42}
+            />
+            <Circle
+              cx={livePositionPoint.x}
+              cy={livePositionPoint.y}
+              fill="#2563EB"
+              r={17}
+              stroke="#FFFFFF"
+              strokeWidth={7}
+            />
+            <Circle
+              cx={livePositionPoint.x}
+              cy={livePositionPoint.y}
+              fill="#DBEAFE"
+              r={6}
+            />
           </Svg>
         ) : null}
       </View>

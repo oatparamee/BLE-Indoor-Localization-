@@ -1,25 +1,114 @@
-import React, { useDeferredValue, useEffect, useMemo, useState } from 'react';
+import React, {
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import {
   SafeAreaView,
   StatusBar,
   StyleSheet,
   View,
 } from 'react-native';
+import {useFocusEffect} from '@react-navigation/native';
 import {
   buildSixFloorNavigationBeaconMarkers,
   fallbackAnchor,
   FloorCode,
   indoorDestinations,
+  MapPoint,
   NavigationBeaconMarker,
+  projectSixFloorMeterPointToMap,
   prototypeMaps,
 } from '../data/mockIndoorDestinations';
 import {
   boelterDemoRoute,
   getRoutePositionAtProgress,
 } from '../data/mockRoutes';
-import { loadBeaconConfig } from '../../config/beaconConfig';
+import { loadBeaconConfig, SavedBeacon } from '../../config/beaconConfig';
+import {api} from '../../services/api';
+import {bleScanner} from '../../services/bleScanner';
 import { MapHomeScreen } from '../screens/MapHomeScreen';
 import { colors } from '../theme/tokens';
+
+const RSSI_FLUSH_MS = 250;
+const POSITION_POLL_MS = 500;
+
+interface LivePositionResult {
+  ready: boolean;
+  reason?: string;
+  smooth_position?: MapPoint;
+}
+
+function canonicalizeRawEvents(
+  events: ReturnType<typeof bleScanner.drainRawEvents>,
+  beacons: SavedBeacon[]
+) {
+  const byIBeacon = new Map<string, string>();
+  const byNameLower = new Map<string, string>();
+  const knownIds = new Set<string>();
+
+  for (const beacon of beacons) {
+    knownIds.add(beacon.id);
+    if (beacon.name) {
+      byNameLower.set(beacon.name.trim().toLowerCase(), beacon.id);
+    }
+    for (const alias of beacon.aliases ?? []) {
+      byNameLower.set(alias.trim().toLowerCase(), beacon.id);
+    }
+    if (
+      beacon.uuid &&
+      beacon.major !== undefined &&
+      beacon.minor !== undefined
+    ) {
+      byIBeacon.set(
+        `${beacon.uuid.toUpperCase()}|${beacon.major}|${beacon.minor}`,
+        beacon.id
+      );
+    }
+  }
+
+  return events
+    .map((event) => {
+      let canonicalId: string | undefined;
+
+      if (
+        event.ibeacon_uuid &&
+        event.ibeacon_major !== null &&
+        event.ibeacon_major !== undefined &&
+        event.ibeacon_minor !== null &&
+        event.ibeacon_minor !== undefined
+      ) {
+        canonicalId = byIBeacon.get(
+          `${event.ibeacon_uuid.toUpperCase()}|${event.ibeacon_major}|${event.ibeacon_minor}`
+        );
+      }
+
+      if (!canonicalId && event.beacon_name) {
+        canonicalId = byNameLower.get(event.beacon_name.trim().toLowerCase());
+      }
+
+      if (!canonicalId && knownIds.has(event.beacon_id)) {
+        canonicalId = event.beacon_id;
+      }
+
+      if (!canonicalId) {
+        return null;
+      }
+
+      return {
+        beacon_id: canonicalId,
+        beacon_name: event.beacon_name,
+        rssi: event.rssi,
+        ibeacon_uuid: event.ibeacon_uuid ?? null,
+        ibeacon_major: event.ibeacon_major ?? null,
+        ibeacon_minor: event.ibeacon_minor ?? null,
+      };
+    })
+    .filter((event): event is NonNullable<typeof event> => event !== null);
+}
 
 export function IndoorNavigatorApp() {
   const defaultMap = prototypeMaps[0] ?? null;
@@ -38,6 +127,13 @@ export function IndoorNavigatorApp() {
   const [routeProgress, setRouteProgress] = useState(0);
   const [mapFocusRequest, setMapFocusRequest] = useState(0);
   const [beaconMarkers, setBeaconMarkers] = useState<NavigationBeaconMarker[]>([]);
+  const [livePosition, setLivePosition] = useState<MapPoint | null>(null);
+  const [liveStatusMessage, setLiveStatusMessage] = useState(
+    'Starting live BLE position...'
+  );
+  const fpSessionIdRef = useRef(
+    `navigation-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+  );
   const deferredMapSearchQuery = useDeferredValue(mapSearchQuery);
   const deferredRoomSearchQuery = useDeferredValue(roomSearchQuery);
 
@@ -73,6 +169,121 @@ export function IndoorNavigatorApp() {
     };
   }, []);
 
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      let unsubscribe: (() => void) | null = null;
+      let flushInterval: ReturnType<typeof setInterval> | null = null;
+      let pollInterval: ReturnType<typeof setInterval> | null = null;
+      let beaconList: SavedBeacon[] = [];
+      const sessionId = fpSessionIdRef.current;
+
+      const cleanup = () => {
+        if (flushInterval) {
+          clearInterval(flushInterval);
+          flushInterval = null;
+        }
+        if (pollInterval) {
+          clearInterval(pollInterval);
+          pollInterval = null;
+        }
+        if (unsubscribe) {
+          unsubscribe();
+          unsubscribe = null;
+        }
+        bleScanner.drainRawEvents();
+      };
+
+      const startLivePosition = async () => {
+        setLiveStatusMessage('Starting live BLE position...');
+        const config = await loadBeaconConfig();
+        beaconList = Object.values(config);
+
+        if (cancelled) {
+          return;
+        }
+
+        bleScanner.setBeaconKalmanConfig(config);
+        setBeaconMarkers(buildSixFloorNavigationBeaconMarkers(beaconList));
+        setLivePosition(null);
+
+        await api.fpStart({sigma_a: 0.5, seed_r_from_loo: true}, sessionId);
+
+        if (cancelled) {
+          return;
+        }
+
+        bleScanner.drainRawEvents();
+        unsubscribe = bleScanner.subscribe(() => {});
+        setLiveStatusMessage('Listening for live BLE position...');
+
+        flushInterval = setInterval(async () => {
+          const events = bleScanner.drainRawEvents();
+          if (events.length === 0) {
+            return;
+          }
+
+          const filteredEvents = canonicalizeRawEvents(events, beaconList);
+          if (filteredEvents.length === 0) {
+            return;
+          }
+
+          try {
+            await api.fpRssiEvents(filteredEvents, sessionId);
+          } catch (error: any) {
+            if (!cancelled) {
+              setLiveStatusMessage(`RSSI stream error: ${error?.message ?? error}`);
+            }
+          }
+        }, RSSI_FLUSH_MS);
+
+        pollInterval = setInterval(async () => {
+          try {
+            const position = (await api.fpPositionLatest(
+              sessionId
+            )) as LivePositionResult;
+
+            if (cancelled) {
+              return;
+            }
+
+            if (!position.ready || !position.smooth_position) {
+              setLivePosition(null);
+              setLiveStatusMessage(
+                position.reason ?? 'Waiting for overlapping beacon readings...'
+              );
+              return;
+            }
+
+            const mapPoint = projectSixFloorMeterPointToMap(
+              position.smooth_position,
+              beaconList
+            );
+            setLivePosition(mapPoint);
+            setLiveStatusMessage('Live position constrained to the walkable path.');
+          } catch (error: any) {
+            if (!cancelled) {
+              setLiveStatusMessage(`Position poll error: ${error?.message ?? error}`);
+            }
+          }
+        }, POSITION_POLL_MS);
+      };
+
+      startLivePosition().catch((error: any) => {
+        if (!cancelled) {
+          setLivePosition(null);
+          setLiveStatusMessage(`Live position unavailable: ${error?.message ?? error}`);
+        }
+      });
+
+      return () => {
+        cancelled = true;
+        cleanup();
+        api.fpReset(sessionId).catch(() => {});
+      };
+    }, [])
+  );
+
   const currentAnchor = useMemo(() => {
     const topLeftBeacon =
       beaconMarkers.find((marker) => marker.label === 'BCPro_1') ??
@@ -90,8 +301,10 @@ export function IndoorNavigatorApp() {
     };
   }, [beaconMarkers]);
   const statusMessage =
-    beaconMarkers.length > 0
-      ? `Showing ${beaconMarkers.length} mapped 6F beacon anchors.`
+    livePosition
+      ? liveStatusMessage
+      : beaconMarkers.length > 0
+      ? liveStatusMessage
       : '6F beacon anchors will appear here after beacon setup loads.';
 
   const filteredMaps = useMemo(() => {
@@ -291,6 +504,7 @@ export function IndoorNavigatorApp() {
           quickRooms={quickRooms}
           currentAnchor={currentAnchor}
           beaconMarkers={beaconMarkers}
+          livePosition={livePosition}
           source={visibleSource}
           destination={visibleDestination}
           selectedFloor={selectedFloor}

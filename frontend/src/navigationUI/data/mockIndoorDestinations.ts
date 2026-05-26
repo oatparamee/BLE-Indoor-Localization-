@@ -395,7 +395,7 @@ const sixFloorNavigationBeaconNames = new Set([
   'BCPro_15',
 ]);
 
-interface BeaconLike {
+export interface NavigationBeaconSource {
   id: string;
   name: string;
   x: number;
@@ -422,7 +422,7 @@ function mapPxToPercent(pixelPoint: MapPoint): MapPoint {
 }
 
 function buildAxisAlignedSixFloorTransform(
-  byName: Map<string, BeaconLike>
+  byName: Map<string, NavigationBeaconSource>
 ): AxisAlignedTransform | null {
   const referenceBeacon = byName.get('BCPro_1');
 
@@ -457,7 +457,7 @@ function applyAxisAlignedNormalization(
 }
 
 export function buildSixFloorNavigationBeaconMarkers(
-  beacons: BeaconLike[]
+  beacons: NavigationBeaconSource[]
 ): NavigationBeaconMarker[] {
   const sixFloorBeacons = beacons.filter((beacon) =>
     sixFloorNavigationBeaconNames.has(beacon.name)
@@ -488,4 +488,21 @@ export function buildSixFloorNavigationBeaconMarkers(
       };
     })
     .filter((marker): marker is NavigationBeaconMarker => marker !== null);
+}
+
+export function projectSixFloorMeterPointToMap(
+  pointMeters: MapPoint,
+  beacons: NavigationBeaconSource[]
+): MapPoint | null {
+  const sixFloorBeacons = beacons.filter((beacon) =>
+    sixFloorNavigationBeaconNames.has(beacon.name)
+  );
+  const byName = new Map(sixFloorBeacons.map((beacon) => [beacon.name, beacon]));
+  const transform = buildAxisAlignedSixFloorTransform(byName);
+
+  if (!transform) {
+    return null;
+  }
+
+  return applyAxisAlignedNormalization(pointMeters, transform);
 }
