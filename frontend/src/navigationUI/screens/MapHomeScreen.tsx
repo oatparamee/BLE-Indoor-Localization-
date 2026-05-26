@@ -102,6 +102,7 @@ export function MapHomeScreen({
   destination,
   selectedFloor,
   onChangeFloor,
+  statusMessage,
   isNavigating,
   routeProgress,
   navigationRoute,
@@ -117,7 +118,9 @@ export function MapHomeScreen({
 }: Props) {
   const searchIsActive = roomSearchQuery.trim().length > 0;
   const visibleRoomResults = searchIsActive ? roomResults : [];
-  const canStartNavigation = Boolean(source && destination);
+  const canStartNavigation = Boolean(
+    source && destination && source.id !== destination.id
+  );
   const [hasSearchedRooms, setHasSearchedRooms] = React.useState(false);
   const [floorMenuOpen, setFloorMenuOpen] = React.useState(false);
   const floors: FloorCode[] = ['6F', '8F'];
@@ -289,7 +292,7 @@ export function MapHomeScreen({
         <View pointerEvents="box-none" style={styles.directionsOverlay}>
           <View style={styles.directionsPanel}>
             <Text numberOfLines={2} style={styles.directionsText}>
-              navigation text here
+              {statusMessage}
             </Text>
           </View>
         </View>

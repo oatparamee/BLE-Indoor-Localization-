@@ -869,6 +869,63 @@ def fp_route():
     })
 
 
+def _parse_route_point(data, label):
+    if not isinstance(data, dict):
+        return None, f"{label} point is required"
+
+    try:
+        x = float(data["x"])
+        y = float(data["y"])
+    except (KeyError, TypeError, ValueError):
+        return None, f"{label}.x and {label}.y are required numbers"
+
+    return {
+        "id": str(data.get("id") or label),
+        "name": str(data.get("name") or label),
+        "x": x,
+        "y": y,
+    }, None
+
+
+@app.route("/fp/route/points", methods=["POST"])
+def fp_route_points():
+    """Shortest walking route between two arbitrary points in the same
+    meter coordinate frame as the beacons / fingerprint grid.
+
+    Navigation uses this for room-to-room routes: it projects each room's
+    map marker back into beacon metres, then reuses the exact same
+    path-constrained route solver as Sensor Fusion.
+
+    Body:
+        {
+          "start": {"x": 1.5, "y": 49.5, "id": "...", "name": "..."},
+          "end": {"x": 70.7, "y": -5.5, "id": "...", "name": "..."}
+        }
+    """
+    data = request.get_json(force=True) or {}
+    start_p, start_error = _parse_route_point(data.get("start"), "start")
+    if start_error:
+        return jsonify({"error": start_error}), 400
+
+    end_p, end_error = _parse_route_point(data.get("end"), "end")
+    if end_error:
+        return jsonify({"error": end_error}), 400
+
+    if start_p["x"] == end_p["x"] and start_p["y"] == end_p["y"]:
+        return jsonify({"error": "start and destination must be different points"}), 400
+
+    route = compute_route(
+        path_constraint.segments(),
+        (start_p["x"], start_p["y"]),
+        (end_p["x"], end_p["y"]),
+    )
+    return jsonify({
+        "start": start_p,
+        "end": end_p,
+        **route,
+    })
+
+
 @app.route("/fp/r/estimate", methods=["GET"])
 def fp_r_estimate():
     """Run LOO cross-val WITHOUT applying the result to the live pipeline.

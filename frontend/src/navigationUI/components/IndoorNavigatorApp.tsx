@@ -18,15 +18,15 @@ import {
   fallbackAnchor,
   FloorCode,
   indoorDestinations,
+  IndoorDestination,
   MapPoint,
   NavigationBeaconMarker,
+  projectSixFloorMapPointToMeters,
   projectSixFloorMeterPointToMap,
   prototypeMaps,
 } from '../data/mockIndoorDestinations';
-import {
-  boelterDemoRoute,
-  getRoutePositionAtProgress,
-} from '../data/mockRoutes';
+import {getRoutePositionAtProgress} from '../data/mockRoutes';
+import type {NavigationRoute} from '../data/mockRoutes';
 import { loadBeaconConfig, SavedBeacon } from '../../config/beaconConfig';
 import {api} from '../../services/api';
 import {bleScanner} from '../../services/bleScanner';
@@ -40,6 +40,47 @@ interface LivePositionResult {
   ready: boolean;
   reason?: string;
   smooth_position?: MapPoint;
+}
+
+interface BuiltNavigationRoute {
+  route: NavigationRoute;
+  status: string;
+}
+
+const getVerticalTransferPoint = (floor: FloorCode): MapPoint =>
+  floor === '6F' ? {x: 77, y: 24} : {x: 66, y: 34};
+
+function buildFallbackNavigationRoute(
+  source: IndoorDestination,
+  destination: IndoorDestination,
+): NavigationRoute {
+  const segments =
+    source.floor === destination.floor
+      ? [
+          {
+            floor: source.floor,
+            points: [source.mapPoint, destination.mapPoint],
+          },
+        ]
+      : [
+          {
+            floor: source.floor,
+            points: [source.mapPoint, getVerticalTransferPoint(source.floor)],
+          },
+          {
+            floor: destination.floor,
+            points: [
+              getVerticalTransferPoint(destination.floor),
+              destination.mapPoint,
+            ],
+          },
+        ];
+
+  return {
+    id: `route-${source.id}-to-${destination.id}`,
+    name: `${source.name} to ${destination.name}`,
+    segments,
+  };
 }
 
 function canonicalizeRawEvents(
@@ -128,6 +169,12 @@ export function IndoorNavigatorApp() {
   const [mapFocusRequest, setMapFocusRequest] = useState(0);
   const [beaconMarkers, setBeaconMarkers] = useState<NavigationBeaconMarker[]>([]);
   const [livePosition, setLivePosition] = useState<MapPoint | null>(null);
+  const [navigationRoute, setNavigationRoute] = useState<NavigationRoute | null>(
+    null
+  );
+  const [navigationRouteStatus, setNavigationRouteStatus] = useState(
+    'Choose a source and destination to route through the walkable path.'
+  );
   const [liveStatusMessage, setLiveStatusMessage] = useState(
     'Starting live BLE position...'
   );
@@ -300,12 +347,13 @@ export function IndoorNavigatorApp() {
       point: topLeftBeacon.point,
     };
   }, [beaconMarkers]);
-  const statusMessage =
-    livePosition
-      ? liveStatusMessage
-      : beaconMarkers.length > 0
-      ? liveStatusMessage
-      : '6F beacon anchors will appear here after beacon setup loads.';
+  const statusMessage = isNavigating
+    ? navigationRouteStatus
+    : livePosition
+    ? liveStatusMessage
+    : beaconMarkers.length > 0
+    ? liveStatusMessage
+    : '6F beacon anchors will appear here after beacon setup loads.';
 
   const filteredMaps = useMemo(() => {
     const normalizedQuery = deferredMapSearchQuery.trim().toLowerCase();
@@ -373,9 +421,78 @@ export function IndoorNavigatorApp() {
       ? selectedDestination
       : null;
   const routePosition = useMemo(
-    () => getRoutePositionAtProgress(boelterDemoRoute, routeProgress),
-    [routeProgress]
+    () =>
+      navigationRoute
+        ? getRoutePositionAtProgress(navigationRoute, routeProgress)
+        : null,
+    [navigationRoute, routeProgress]
   );
+
+  const clearNavigationRoute = () => {
+    setNavigationRoute(null);
+    setNavigationRouteStatus(
+      'Choose a source and destination to route through the walkable path.'
+    );
+  };
+
+  const buildSixFloorNavigationRoute = async (
+    source: IndoorDestination,
+    destination: IndoorDestination,
+  ): Promise<BuiltNavigationRoute | null> => {
+    const config = await loadBeaconConfig();
+    const beaconList = Object.values(config);
+    setBeaconMarkers(buildSixFloorNavigationBeaconMarkers(beaconList));
+
+    const startMeters = projectSixFloorMapPointToMeters(
+      source.mapPoint,
+      beaconList
+    );
+    const endMeters = projectSixFloorMapPointToMeters(
+      destination.mapPoint,
+      beaconList
+    );
+
+    if (!startMeters || !endMeters) {
+      return null;
+    }
+
+    const route = await api.fpRoutePoints(
+      {
+        id: source.id,
+        name: source.name,
+        x: startMeters.x,
+        y: startMeters.y,
+      },
+      {
+        id: destination.id,
+        name: destination.name,
+        x: endMeters.x,
+        y: endMeters.y,
+      }
+    );
+    const routePoints = route.waypoints
+      .map((waypoint) => projectSixFloorMeterPointToMap(waypoint, beaconList))
+      .filter((point): point is MapPoint => point !== null);
+
+    if (routePoints.length < 2) {
+      return null;
+    }
+
+    return {
+      route: {
+        id: `route-${source.id}-to-${destination.id}`,
+        name: `${source.name} to ${destination.name}`,
+        segments: [{floor: '6F', points: routePoints}],
+      },
+      status: route.reachable
+        ? `${source.name} to ${destination.name}: ${route.length.toFixed(
+            1
+          )} m along the 6F walkable path.`
+        : `${source.name} to ${destination.name}: ${
+            route.reason ?? 'walkable path unavailable'
+          }; showing the direct connector.`,
+    };
+  };
 
   const handleSelectMap = (mapId: string) => {
     const nextMap = mapById.get(mapId);
@@ -392,6 +509,7 @@ export function IndoorNavigatorApp() {
     setIsNavigating(false);
     setActiveStepIndex(0);
     setRouteProgress(0);
+    clearNavigationRoute();
   };
 
   const handleClearMapSelection = () => {
@@ -404,6 +522,7 @@ export function IndoorNavigatorApp() {
     setIsNavigating(false);
     setActiveStepIndex(0);
     setRouteProgress(0);
+    clearNavigationRoute();
   };
 
   const handleSelectDestination = (destinationId: string) => {
@@ -418,6 +537,7 @@ export function IndoorNavigatorApp() {
     setIsNavigating(false);
     setActiveStepIndex(0);
     setRouteProgress(0);
+    clearNavigationRoute();
   };
 
   const handleSelectSource = (destinationId: string) => {
@@ -432,16 +552,51 @@ export function IndoorNavigatorApp() {
     setIsNavigating(false);
     setActiveStepIndex(0);
     setRouteProgress(0);
+    clearNavigationRoute();
   };
 
-  const handleStartNavigation = () => {
-    if (!visibleSource || !visibleDestination) {
+  const handleStartNavigation = async () => {
+    if (
+      !visibleSource ||
+      !visibleDestination ||
+      visibleSource.id === visibleDestination.id
+    ) {
       return;
     }
 
-    const startPosition = getRoutePositionAtProgress(boelterDemoRoute, 0);
+    let builtRoute: BuiltNavigationRoute | null = null;
+
+    if (visibleSource.floor === '6F' && visibleDestination.floor === '6F') {
+      try {
+        builtRoute = await buildSixFloorNavigationRoute(
+          visibleSource,
+          visibleDestination
+        );
+      } catch (error: any) {
+        builtRoute = {
+          route: buildFallbackNavigationRoute(visibleSource, visibleDestination),
+          status: `6F route service unavailable: ${
+            error?.message ?? error
+          }; showing a temporary direct connector.`,
+        };
+      }
+    }
+
+    if (!builtRoute) {
+      builtRoute = {
+        route: buildFallbackNavigationRoute(visibleSource, visibleDestination),
+        status:
+          visibleSource.floor === '6F' && visibleDestination.floor === '6F'
+            ? '6F path transform unavailable; showing a temporary direct connector.'
+            : 'Path-constrained routing is ready for 6F. This route is a temporary connector until the 8F path graph is added.',
+      };
+    }
+
+    const startPosition = getRoutePositionAtProgress(builtRoute.route, 0);
 
     setSelectedFloor(startPosition.floor);
+    setNavigationRoute(builtRoute.route);
+    setNavigationRouteStatus(builtRoute.status);
     setIsNavigating(true);
     setActiveStepIndex(0);
     setRouteProgress(0);
@@ -453,6 +608,7 @@ export function IndoorNavigatorApp() {
     setIsNavigating(false);
     setActiveStepIndex(0);
     setRouteProgress(0);
+    clearNavigationRoute();
   };
 
   const handleRefocusNavigation = () => {
@@ -460,14 +616,20 @@ export function IndoorNavigatorApp() {
       return;
     }
 
-    setSelectedFloor(isNavigating ? routePosition.floor : visibleSource!.floor);
+    setSelectedFloor(
+      isNavigating ? routePosition?.floor ?? selectedFloor : visibleSource!.floor
+    );
     setMapFocusRequest((request) => request + 1);
   };
 
   const handleChangeRouteProgress = (progress: number) => {
+    if (!navigationRoute) {
+      return;
+    }
+
     const nextProgress = Math.min(100, Math.max(0, progress));
     const nextPosition = getRoutePositionAtProgress(
-      boelterDemoRoute,
+      navigationRoute,
       nextProgress
     );
 
@@ -476,10 +638,14 @@ export function IndoorNavigatorApp() {
   };
 
   const handleStepRouteProgress = (delta: number) => {
+    if (!navigationRoute) {
+      return;
+    }
+
     setRouteProgress((currentProgress) => {
       const nextProgress = Math.min(100, Math.max(0, currentProgress + delta));
       const nextPosition = getRoutePositionAtProgress(
-        boelterDemoRoute,
+        navigationRoute,
         nextProgress
       );
 
@@ -514,7 +680,7 @@ export function IndoorNavigatorApp() {
           isNavigating={isNavigating}
           activeStepIndex={activeStepIndex}
           routeProgress={routeProgress}
-          navigationRoute={isNavigating ? boelterDemoRoute : null}
+          navigationRoute={isNavigating ? navigationRoute : null}
           routePosition={isNavigating ? routePosition : null}
           onSelectMap={handleSelectMap}
           onClearMapSelection={handleClearMapSelection}
