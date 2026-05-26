@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "beacons": {
+    "B3AA5DEA-75E4-3A56-3DD3-5FC88F0E7000": {
+      "id": "B3AA5DEA-75E4-3A56-3DD3-5FC88F0E7000",
+      "name": "BCPro_2",
+      "x": 0.0,
+      "y": 0.0
+    }
+  }
+}

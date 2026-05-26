@@ -22,6 +22,11 @@
     GET    /fingerprint/summary      counts + floor RSSI
     POST   /fingerprint/match        one-shot match for an RSSI vector
 
+  8th-floor (single-beacon detector — no fingerprinting on 8F):
+    GET    /8f/beacons               list 8F beacons (just BCPro_2)
+    POST   /floor/detect             classify an RSSI vector as 6F vs 8F
+                                     based on whether BCPro_2 is heard
+
   Live fingerprint pipeline (raw RSSI -> Gaussian match -> 4D KF):
     POST   /fp/start                 begin tracking, optionally seed R via LOO
     POST   /fp/rssi/events           stream raw RSSI events
@@ -36,6 +41,7 @@
 ==========================================================================
 """
 
+import os
 import threading
 
 from flask import Flask, request, jsonify
@@ -62,6 +68,14 @@ beacon_store = BeaconStore()
 fingerprint_store = FingerprintStore()
 survey_collector = SurveyCollector()
 
+# 8th-floor beacon registry. Kept in its own JSON (and as its own
+# BeaconStore instance) so BCPro_2 never leaks into the 6F fingerprint
+# matcher or routing graph. There is intentionally no 8F fingerprint —
+# the only thing we do on 8F is "did we hear BCPro_2?", which is a
+# single-beacon presence check, not a position estimate.
+DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
+beacon_store_8f = BeaconStore(path=os.path.join(DATA_DIR, "beacons_8f.json"))
+
 # Walkable-corridor polyline. Read by the live pipeline to clamp the
 # smoothed (x, y) onto the path; exposed over /fp/path so the frontend
 # can render it and let the user edit it.
@@ -85,6 +99,7 @@ def health():
         "status": "ok",
         "beacons": [b["name"] for b in beacon_store.list()],
         "fingerprint_cells": fingerprint_store.summary().get("cell_count", 0),
+        "beacons_8f": [b["name"] for b in beacon_store_8f.list()],
     })
 
 
@@ -465,6 +480,142 @@ def fingerprint_match_route():
     return jsonify({"ready": True, **result})
 
 
+# ---------- 8th-floor presence detector (BCPro_2 only) ----------
+#
+# We do NOT fingerprint the 8th floor. The only product question on 8F is
+# "did the phone hear BCPro_2 strongly enough to say the user has stepped
+# out of the elevator?" — a single-beacon presence check. Anything more
+# (position, routing) lives on the 6F side.
+
+# Default RSSI (dBm) above which BCPro_2 alone is enough to call the user
+# "on 8F". Picked to sit comfortably above the cross-floor leak we saw
+# from BCPro_2 when 6F survey cells happened to pick it up (always
+# weaker than ~-90 dBm). Tunable per request via `threshold_dbm`.
+_FLOOR_8F_DETECT_THRESHOLD_DBM = -75.0
+
+
+def _resolve_8f_rssi(rssi_blob) -> "tuple[float | None, bool]":
+    """From an arbitrary {<id|name|alias>: rssi} dict, return the strongest
+    BCPro_2 RSSI and whether ANY non-8F key was present (used as a
+    fallback signal that the user is on 6F).
+
+    Accepts keys in any of these forms because the BLE scanner reports
+    advertising-name and id inconsistently across phones:
+      • canonical id from the 8F registry (UUID string)
+      • primary `name` of an 8F beacon (e.g. "BCPro_2")
+      • any alias declared on an 8F beacon
+    Comparisons against name/alias are case-insensitive.
+
+    Returns (bcpro_2_rssi_or_None, saw_non_8f_key).
+    """
+    if not isinstance(rssi_blob, dict):
+        return None, False
+
+    eight_f_keys: set = set()
+    for entry in beacon_store_8f.as_dict().values():
+        bid = entry.get("id")
+        if bid:
+            eight_f_keys.add(str(bid))
+        nm = entry.get("name")
+        if nm:
+            eight_f_keys.add(str(nm).strip().lower())
+        for alias in entry.get("aliases", []) or []:
+            eight_f_keys.add(str(alias).strip().lower())
+
+    best: float | None = None
+    saw_other = False
+    for raw_key, v in rssi_blob.items():
+        if v is None:
+            continue
+        try:
+            rssi = float(v)
+        except (TypeError, ValueError):
+            continue
+        key_id = str(raw_key)
+        key_name = key_id.strip().lower()
+        if key_id in eight_f_keys or key_name in eight_f_keys:
+            if best is None or rssi > best:
+                best = rssi
+        else:
+            saw_other = True
+    return best, saw_other
+
+
+@app.route("/8f/beacons", methods=["GET"])
+def beacons_list_8f():
+    return jsonify({"beacons": beacon_store_8f.as_dict()})
+
+
+@app.route("/floor/detect", methods=["POST"])
+def floor_detect():
+    """Classify an RSSI vector as 6F vs 8F based on a BCPro_2 presence
+    check.
+
+    Body:
+        {
+          "rssi": {"<beacon_id_or_name>": -65, ...},
+          "threshold_dbm": -75   // optional; defaults to -75
+        }
+
+    Keys in `rssi` may be canonical beacon ids OR advertised names OR
+    aliases — the endpoint resolves any form against the 8F registry.
+
+    Returns:
+        {
+          "floor": 8 | 6 | null,
+          "on_8f": true | false,
+          "bcpro_2_rssi": -58.4 | null,
+          "threshold_dbm": -75.0,
+          "reason": "..."
+        }
+
+    Decision:
+        BCPro_2 RSSI >= threshold      -> 8F
+        BCPro_2 below threshold but
+        some other beacon was observed -> 6F
+        no readings at all             -> null (unknown)
+    """
+    data = request.get_json(force=True) or {}
+
+    try:
+        threshold = float(
+            data.get("threshold_dbm", _FLOOR_8F_DETECT_THRESHOLD_DBM)
+        )
+    except (TypeError, ValueError):
+        return jsonify({"error": "threshold_dbm must be numeric"}), 400
+
+    bcpro_2_rssi, saw_other = _resolve_8f_rssi(data.get("rssi"))
+
+    if bcpro_2_rssi is not None and bcpro_2_rssi >= threshold:
+        floor = 8
+        reason = (
+            f"BCPro_2 RSSI {bcpro_2_rssi:.1f} dBm >= threshold "
+            f"{threshold:.1f} dBm"
+        )
+    elif saw_other:
+        floor = 6
+        reason = "BCPro_2 not heard above threshold; other beacons observed"
+    elif bcpro_2_rssi is not None:
+        # We heard BCPro_2 but only weakly — most likely cross-floor leak
+        # from the 6F side, so report 6F rather than unknown.
+        floor = 6
+        reason = (
+            f"BCPro_2 RSSI {bcpro_2_rssi:.1f} dBm below threshold "
+            f"{threshold:.1f} dBm; treating as 6F"
+        )
+    else:
+        floor = None
+        reason = "no readings"
+
+    return jsonify({
+        "floor": floor,
+        "on_8f": floor == 8,
+        "bcpro_2_rssi": bcpro_2_rssi,
+        "threshold_dbm": threshold,
+        "reason": reason,
+    })
+
+
 # ---------- Fingerprint pipeline (raw RSSI -> match -> 4D KF) ----------
 
 @app.route("/fp/start", methods=["POST"])
@@ -737,9 +888,17 @@ if __name__ == "__main__":
     fp_summary = fingerprint_store.summary()
     print("=" * 60)
     print("  BLE Indoor Localization Backend")
-    print(f"  Beacons:           {len(beacon_store.list())} configured")
-    print(f"  Fingerprint cells: {fp_summary.get('cell_count', 0)}")
+    print(f"  6F beacons:        {len(beacon_store.list())} configured")
+    print(f"  6F fingerprint:    {fp_summary.get('cell_count', 0)} cells")
     floor = fp_summary.get("floor_rssi")
-    print(f"  Floor RSSI:        {floor:.2f} dBm" if floor is not None else "  Floor RSSI:        — (no survey yet)")
+    print(
+        f"  6F floor RSSI:     {floor:.2f} dBm"
+        if floor is not None
+        else "  6F floor RSSI:     — (no survey yet)"
+    )
+    print(
+        f"  8F beacons:        {len(beacon_store_8f.list())} (presence-only,"
+        " no fingerprint)"
+    )
     print("=" * 60)
     app.run(host="0.0.0.0", port=5001, debug=True)
