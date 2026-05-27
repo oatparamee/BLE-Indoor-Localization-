@@ -9,6 +9,7 @@ import SiteSurveyScreen from './src/screens/SiteSurveyScreen';
 import FusionScreen from './src/screens/FusionScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
 import BoelterNavigationScreen from './src/screens/BoelterNavigationScreen';
+import BoelterNavigationTestScreen from './src/screens/BoelterNavigationTestScreen';
 
 const Tab = createBottomTabNavigator();
 
@@ -18,6 +19,7 @@ function TabIcon({label, focused}: {label: string; focused: boolean}) {
     Survey: '🗺',
     Fusion: '🎯',
     Navigation: '🧭',
+    Test: '🧪',
     Settings: '🔧',
   };
   return (
@@ -109,6 +111,16 @@ export default function App() {
             title: 'Navigation',
             tabBarIcon: ({focused}) => (
               <TabIcon label="Navigation" focused={focused} />
+            ),
+          }}
+        />
+        <Tab.Screen
+          name="Test"
+          component={BoelterNavigationTestScreen}
+          options={{
+            title: 'Test Recording',
+            tabBarIcon: ({focused}) => (
+              <TabIcon label="Test" focused={focused} />
             ),
           }}
         />
