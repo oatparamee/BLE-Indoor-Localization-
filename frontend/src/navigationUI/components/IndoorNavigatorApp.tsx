@@ -46,6 +46,13 @@ interface BuiltNavigationRoute {
   status: string;
 }
 
+interface NavigationEndpoint {
+  id: string;
+  name: string;
+  floor: FloorCode;
+  mapPoint: MapPoint;
+}
+
 interface PathSegmentMeters {
   x1: number;
   y1: number;
@@ -67,6 +74,9 @@ interface SixFloorPathProjection {
   segment: SixFloorPathSegment;
 }
 
+const SIX_FLOOR_ELEVATOR_2_ID = '6f-elevator-2';
+const EIGHT_FLOOR_ELEVATOR_2_ID = '8f-elevator-2';
+
 const getVerticalTransferPoint = (floor: FloorCode): MapPoint =>
   floor === '6F' ? {x: 77, y: 24} : {x: 66, y: 34};
 
@@ -74,6 +84,27 @@ const getPointDistance = (a: MapPoint, b: MapPoint) =>
   Math.hypot(a.x - b.x, a.y - b.y);
 
 const clampUnit = (value: number) => Math.min(1, Math.max(0, value));
+
+function toNavigationEndpoint(destination: IndoorDestination): NavigationEndpoint {
+  return {
+    id: destination.id,
+    name: destination.name,
+    floor: destination.floor,
+    mapPoint: destination.mapPoint,
+  };
+}
+
+function mergeRoutes(
+  id: string,
+  name: string,
+  routes: NavigationRoute[]
+): NavigationRoute {
+  return {
+    id,
+    name,
+    segments: routes.flatMap((route) => route.segments),
+  };
+}
 
 function buildSixFloorPathSegments(
   pathSegments: PathSegmentMeters[],
@@ -216,8 +247,8 @@ function getSixFloorPathAccessProjection(
 }
 
 function buildFallbackNavigationRoute(
-  source: IndoorDestination,
-  destination: IndoorDestination,
+  source: NavigationEndpoint,
+  destination: NavigationEndpoint,
 ): NavigationRoute {
   const segments =
     source.floor === destination.floor
@@ -245,6 +276,57 @@ function buildFallbackNavigationRoute(
     id: `route-${source.id}-to-${destination.id}`,
     name: `${source.name} to ${destination.name}`,
     segments,
+  };
+}
+
+function buildEightFloorHallwayRoute(
+  source: NavigationEndpoint,
+  destination: NavigationEndpoint
+): BuiltNavigationRoute {
+  const start = source.mapPoint;
+  const end = destination.mapPoint;
+  const points: MapPoint[] = [start];
+  const mainHallX = 66;
+  const eastHallX = 77;
+  const westHallX = 34;
+  const topHallY = 35;
+  const libraryHallY = 53;
+  const southHallY = 80;
+
+  const pushPoint = (pointToAdd: MapPoint) => {
+    const lastPoint = points[points.length - 1];
+    if (
+      Math.abs(lastPoint.x - pointToAdd.x) > 0.01 ||
+      Math.abs(lastPoint.y - pointToAdd.y) > 0.01
+    ) {
+      points.push(pointToAdd);
+    }
+  };
+
+  if (end.x <= 42) {
+    pushPoint({x: mainHallX, y: topHallY});
+    pushPoint({x: westHallX, y: topHallY});
+    pushPoint({x: westHallX, y: end.y});
+  } else if (end.y >= 72) {
+    pushPoint({x: mainHallX, y: southHallY});
+    pushPoint({x: end.x, y: southHallY});
+  } else if (end.x >= 72) {
+    pushPoint({x: mainHallX, y: libraryHallY});
+    pushPoint({x: eastHallX, y: libraryHallY});
+    pushPoint({x: eastHallX, y: end.y});
+  } else {
+    pushPoint({x: mainHallX, y: end.y});
+  }
+
+  pushPoint(end);
+
+  return {
+    route: {
+      id: `route-${source.id}-to-${destination.id}`,
+      name: `${source.name} to ${destination.name}`,
+      segments: [{floor: '8F', points}],
+    },
+    status: `${source.name} to ${destination.name}: using the 8F hallway guide from Elevator 2.`,
   };
 }
 
@@ -601,8 +683,8 @@ export function IndoorNavigatorApp() {
   };
 
   const buildSixFloorNavigationRoute = async (
-    source: IndoorDestination,
-    destination: IndoorDestination,
+    source: NavigationEndpoint,
+    destination: NavigationEndpoint,
   ): Promise<BuiltNavigationRoute | null> => {
     const config = await loadBeaconConfig();
     const beaconList = Object.values(config);
@@ -680,6 +762,41 @@ export function IndoorNavigatorApp() {
     };
   };
 
+  const buildSixToEightNavigationRoute = async (
+    source: NavigationEndpoint,
+    destination: IndoorDestination
+  ): Promise<BuiltNavigationRoute | null> => {
+    const sixFloorElevator = destinationById.get(SIX_FLOOR_ELEVATOR_2_ID);
+    const eightFloorElevator = destinationById.get(EIGHT_FLOOR_ELEVATOR_2_ID);
+
+    if (!sixFloorElevator || !eightFloorElevator) {
+      return null;
+    }
+
+    const sixFloorRoute = await buildSixFloorNavigationRoute(
+      source,
+      toNavigationEndpoint(sixFloorElevator)
+    );
+
+    if (!sixFloorRoute) {
+      return null;
+    }
+
+    const eightFloorRoute = buildEightFloorHallwayRoute(
+      toNavigationEndpoint(eightFloorElevator),
+      toNavigationEndpoint(destination)
+    );
+
+    return {
+      route: mergeRoutes(
+        `route-${source.id}-to-${destination.id}`,
+        `${source.name} to ${destination.name}`,
+        [sixFloorRoute.route, eightFloorRoute.route]
+      ),
+      status: `${source.name} to ${destination.name}: follow the 6F path to Elevator 2, then continue from 8F Elevator 2.`,
+    };
+  };
+
   const handleSelectMap = (mapId: string) => {
     const nextMap = mapById.get(mapId);
     if (!nextMap) {
@@ -742,39 +859,46 @@ export function IndoorNavigatorApp() {
   };
 
   const handleStartNavigation = async () => {
-    if (
-      !visibleSource ||
-      !visibleDestination ||
-      visibleSource.id === visibleDestination.id
-    ) {
+    if (!livePosition || !visibleDestination) {
       return;
     }
 
+    const liveSource: NavigationEndpoint = {
+      id: 'live-position',
+      name: 'Current location',
+      floor: '6F',
+      mapPoint: livePosition,
+    };
     let builtRoute: BuiltNavigationRoute | null = null;
 
-    if (visibleSource.floor === '6F' && visibleDestination.floor === '6F') {
-      try {
+    try {
+      if (visibleDestination.floor === '6F') {
         builtRoute = await buildSixFloorNavigationRoute(
-          visibleSource,
+          liveSource,
           visibleDestination
         );
-      } catch (error: any) {
-        builtRoute = {
-          route: buildFallbackNavigationRoute(visibleSource, visibleDestination),
-          status: `6F route service unavailable: ${
-            error?.message ?? error
-          }; showing a temporary direct connector.`,
-        };
+      } else {
+        builtRoute = await buildSixToEightNavigationRoute(
+          liveSource,
+          visibleDestination
+        );
       }
+    } catch (error: any) {
+      builtRoute = {
+        route: buildFallbackNavigationRoute(liveSource, visibleDestination),
+        status: `Route service unavailable: ${
+          error?.message ?? error
+        }; showing a temporary connector.`,
+      };
     }
 
     if (!builtRoute) {
       builtRoute = {
-        route: buildFallbackNavigationRoute(visibleSource, visibleDestination),
+        route: buildFallbackNavigationRoute(liveSource, visibleDestination),
         status:
-          visibleSource.floor === '6F' && visibleDestination.floor === '6F'
+          visibleDestination.floor === '6F'
             ? '6F path transform unavailable; showing a temporary direct connector.'
-            : 'Path-constrained routing is ready for 6F. This route is a temporary connector until the 8F path graph is added.',
+            : 'Elevator 2 transfer route unavailable; showing a temporary connector.',
       };
     }
 
@@ -798,12 +922,16 @@ export function IndoorNavigatorApp() {
   };
 
   const handleRefocusNavigation = () => {
-    if (!visibleSource && !isNavigating) {
+    if (!livePosition && !visibleSource && !isNavigating) {
       return;
     }
 
     setSelectedFloor(
-      isNavigating ? routePosition?.floor ?? selectedFloor : visibleSource!.floor
+      isNavigating
+        ? routePosition?.floor ?? selectedFloor
+        : livePosition
+        ? '6F'
+        : visibleSource!.floor
     );
     setMapFocusRequest((request) => request + 1);
   };
