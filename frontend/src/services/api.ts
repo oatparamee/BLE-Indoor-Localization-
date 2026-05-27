@@ -79,6 +79,13 @@ export interface PersistedBeacon {
   aliases?: string[];
 }
 
+export interface RoutePoint {
+  id?: string;
+  name?: string;
+  x: number;
+  y: number;
+}
+
 export const api = {
   health: () => get('/health'),
 
@@ -200,6 +207,18 @@ export const api = {
    *  the walkable-path polyline. */
   fpRoute: (start_beacon_id: string, end_beacon_id: string) =>
     post('/fp/route', {start_beacon_id, end_beacon_id}) as Promise<{
+      start: {id: string; name: string; x: number; y: number};
+      end: {id: string; name: string; x: number; y: number};
+      waypoints: {x: number; y: number}[];
+      length: number;
+      reachable: boolean;
+      reason?: string;
+    }>,
+
+  /** Shortest walking route between arbitrary points in the beacon/fingerprint
+   *  meter coordinate frame. */
+  fpRoutePoints: (start: RoutePoint, end: RoutePoint) =>
+    post('/fp/route/points', {start, end}) as Promise<{
       start: {id: string; name: string; x: number; y: number};
       end: {id: string; name: string; x: number; y: number};
       waypoints: {x: number; y: number}[];

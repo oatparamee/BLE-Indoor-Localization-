@@ -14,6 +14,7 @@ import {
   CurrentAnchor,
   FloorCode,
   IndoorDestination,
+  MapPoint,
   NavigationBeaconMarker,
   PrototypeMapZone,
 } from '../data/mockIndoorDestinations';
@@ -66,6 +67,7 @@ interface Props {
   quickRooms: IndoorDestination[];
   currentAnchor: CurrentAnchor;
   beaconMarkers: NavigationBeaconMarker[];
+  livePosition: MapPoint | null;
   source: IndoorDestination | null;
   destination: IndoorDestination | null;
   selectedFloor: FloorCode;
@@ -95,15 +97,16 @@ export function MapHomeScreen({
   roomResults,
   currentAnchor,
   beaconMarkers,
+  livePosition,
   source,
   destination,
   selectedFloor,
   onChangeFloor,
+  statusMessage,
   isNavigating,
   routeProgress,
   navigationRoute,
   routePosition,
-  onSelectSource,
   onSelectDestination,
   onStartNavigation,
   onStopNavigation,
@@ -114,7 +117,7 @@ export function MapHomeScreen({
 }: Props) {
   const searchIsActive = roomSearchQuery.trim().length > 0;
   const visibleRoomResults = searchIsActive ? roomResults : [];
-  const canStartNavigation = Boolean(source && destination);
+  const canStartNavigation = Boolean(destination && livePosition);
   const [hasSearchedRooms, setHasSearchedRooms] = React.useState(false);
   const [floorMenuOpen, setFloorMenuOpen] = React.useState(false);
   const floors: FloorCode[] = ['6F', '8F'];
@@ -132,11 +135,6 @@ export function MapHomeScreen({
   const dismissTransientUi = () => {
     Keyboard.dismiss();
     setFloorMenuOpen(false);
-  };
-
-  const handleSelectSource = (destinationId: string) => {
-    dismissTransientUi();
-    onSelectSource(destinationId);
   };
 
   const handleSelectDestination = (destinationId: string) => {
@@ -165,6 +163,7 @@ export function MapHomeScreen({
         currentAnchor={currentAnchor}
         destination={destination}
         beaconMarkers={beaconMarkers}
+        livePosition={livePosition}
         zoneName="Boelter 6F to 8F"
         showRooms
         isNavigating={isNavigating}
@@ -175,7 +174,7 @@ export function MapHomeScreen({
         focusPoint={
           isNavigating
             ? routePosition?.point ?? source?.mapPoint ?? currentAnchor.point
-            : source?.mapPoint ?? currentAnchor.point
+            : livePosition ?? source?.mapPoint ?? currentAnchor.point
         }
         focusRequest={mapFocusRequest}
       />
@@ -201,7 +200,7 @@ export function MapHomeScreen({
                 <View style={styles.selectionChip}>
                   <Text style={styles.selectionLabel}>From</Text>
                   <Text numberOfLines={1} style={styles.selectionValue}>
-                    {source ? `${source.name} | ${source.floor}` : 'Choose source'}
+                    {livePosition ? 'Live position | 6F' : 'Waiting for live dot'}
                   </Text>
                 </View>
                 <View style={styles.selectionChip}>
@@ -238,22 +237,6 @@ export function MapHomeScreen({
                       <View style={styles.resultActions}>
                         <Pressable
                           accessibilityRole="button"
-                          onPress={() => handleSelectSource(room.id)}
-                          style={[
-                            styles.resultAction,
-                            source?.id === room.id && styles.resultActionActive,
-                          ]}>
-                          <Text
-                            style={[
-                              styles.resultActionText,
-                              source?.id === room.id &&
-                                styles.resultActionTextActive,
-                            ]}>
-                            Source
-                          </Text>
-                        </Pressable>
-                        <Pressable
-                          accessibilityRole="button"
                           onPress={() => handleSelectDestination(room.id)}
                           style={[
                             styles.resultAction,
@@ -285,7 +268,7 @@ export function MapHomeScreen({
         <View pointerEvents="box-none" style={styles.directionsOverlay}>
           <View style={styles.directionsPanel}>
             <Text numberOfLines={2} style={styles.directionsText}>
-              navigation text here
+              {statusMessage}
             </Text>
           </View>
         </View>
