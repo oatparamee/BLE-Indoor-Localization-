@@ -14,6 +14,12 @@ Writes (PNG, 200 DPI):
     backend/data/plots/03_per_beacon_trends.png
     backend/data/plots/04_loo_error_map.png
     backend/data/plots/05_loo_error_distribution.png
+    backend/data/plots/06_path_loss_fit.png
+    backend/data/plots/07_per_cell_noise_map.png
+    backend/data/plots/08_beacon_coverage.png
+    backend/data/plots/09_error_vs_beacons_heard.png
+    backend/data/plots/10_error_vs_distance_to_nearest.png
+    backend/data/plots/11_residual_ellipses.png
 
 And a summary file:
     backend/data/plots/r_q_summary.txt
@@ -436,7 +442,224 @@ def main():
         plt.close()
         print("  wrote 05_loo_error_distribution.png")
 
-    # ── 6. R / Q summary text file ────────────────────────────────
+    # ── 6. Path-loss model fit ────────────────────────────────────
+    if all_dists:
+        dists_arr = np.array(all_dists, dtype=float)
+        means_arr = np.array(all_means, dtype=float)
+        log_d = np.log10(dists_arr)
+        # RSSI = A - 10 n log10(d)  ->  linear fit means = A + (-10n)*log10(d)
+        slope, intercept = np.polyfit(log_d, means_arr, 1)
+        n_path = -slope / 10.0
+        A_ref = intercept
+
+        d_grid = np.logspace(np.log10(dists_arr.min()),
+                             np.log10(dists_arr.max()), 200)
+        rssi_fit = A_ref - 10.0 * n_path * np.log10(d_grid)
+        residuals = means_arr - (A_ref - 10.0 * n_path * log_d)
+        sigma_pl = float(np.std(residuals))
+
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.scatter(dists_arr, means_arr, s=10, alpha=0.25,
+                   color="#4C78A8", label="Cell-beacon pairs")
+        ax.plot(d_grid, rssi_fit, color="#D62728", linewidth=2.2,
+                label=f"Fit: RSSI = {A_ref:.1f} − 10·{n_path:.2f}·log10(d)")
+        ax.fill_between(d_grid, rssi_fit - sigma_pl, rssi_fit + sigma_pl,
+                        color="#D62728", alpha=0.15,
+                        label=f"±1σ shadowing = {sigma_pl:.2f} dB")
+        ax.set_xscale("log")
+        ax.set_xlabel("Distance from beacon (m, log scale)")
+        ax.set_ylabel("Mean RSSI (dBm)")
+        ax.set_title("Path-loss model fit (log-distance regression)")
+        ax.grid(True, which="both", alpha=0.3)
+        ax.legend()
+        plt.tight_layout()
+        plt.savefig(os.path.join(PLOTS_DIR, "06_path_loss_fit.png"), dpi=DPI)
+        plt.close()
+        print(f"  wrote 06_path_loss_fit.png  (n={n_path:.2f}, A={A_ref:.1f},"
+              f" sigma={sigma_pl:.2f} dB)")
+
+    # ── 7. Per-cell measurement-noise (mean std across beacons) ────
+    cell_std_means = []
+    for c in cells:
+        stds = [float(v["std"]) for v in c["beacons"].values()
+                if v is not None and v.get("std") is not None]
+        cell_std_means.append(float(np.mean(stds)) if stds else np.nan)
+    cell_std_means = np.array(cell_std_means, dtype=float)
+
+    valid = ~np.isnan(cell_std_means)
+    if valid.any():
+        fig, ax = plt.subplots(figsize=(14, 8))
+        sc = ax.scatter(cx[valid], cy[valid], c=cell_std_means[valid],
+                        cmap="magma", s=80, edgecolors="black",
+                        linewidths=0.5, zorder=2)
+        cb = plt.colorbar(sc, ax=ax)
+        cb.set_label("Mean RSSI std at cell (dB)")
+        for b in beacons:
+            ax.scatter(b["x"], b["y"], s=200, marker="^",
+                       facecolors="red", edgecolors="black",
+                       linewidths=1.5, zorder=3)
+        ax.set_xlabel("x (m)")
+        ax.set_ylabel("y (m)")
+        ax.set_title("Per-cell measurement noise (avg σ across heard beacons)")
+        ax.set_aspect("equal", adjustable="datalim")
+        ax.grid(True, alpha=0.2)
+        plt.tight_layout()
+        plt.savefig(os.path.join(PLOTS_DIR, "07_per_cell_noise_map.png"), dpi=DPI)
+        plt.close()
+        print("  wrote 07_per_cell_noise_map.png")
+
+    # ── 8. Beacon coverage — cells-heard + samples per beacon ─────
+    heard_count = []
+    sample_count = []
+    for bid in beacon_ids:
+        hc = sum(1 for c in cells if c["beacons"].get(bid) is not None)
+        sc_n = sum(int(c["beacons"][bid]["n"]) for c in cells
+                   if c["beacons"].get(bid) is not None)
+        heard_count.append(hc)
+        sample_count.append(sc_n)
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 5))
+    pos = np.arange(len(beacon_names))
+    ax1.bar(pos, heard_count, color="#4C78A8", edgecolor="black")
+    ax1.set_xticks(pos)
+    ax1.set_xticklabels(beacon_names, rotation=45, ha="right", fontsize=8)
+    ax1.set_ylabel(f"Cells where beacon was heard (of {len(cells)})")
+    ax1.set_title("Coverage — cells heard per beacon")
+    ax1.grid(True, axis="y", alpha=0.3)
+    ax1.axhline(len(cells), color="gray", linestyle=":", alpha=0.7)
+
+    ax2.bar(pos, sample_count, color="#F58518", edgecolor="black")
+    ax2.set_xticks(pos)
+    ax2.set_xticklabels(beacon_names, rotation=45, ha="right", fontsize=8)
+    ax2.set_ylabel("Total RSSI samples collected")
+    ax2.set_title("Sample volume per beacon")
+    ax2.grid(True, axis="y", alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig(os.path.join(PLOTS_DIR, "08_beacon_coverage.png"), dpi=DPI)
+    plt.close()
+    print("  wrote 08_beacon_coverage.png")
+
+    # ── 9 / 10 / 11. LOO-dependent diagnostics ────────────────────
+    if loo:
+        rs = loo["per_cell_residuals"]
+        tx = np.array([r["truth_x"] for r in rs])
+        ty = np.array([r["truth_y"] for r in rs])
+        ex = np.array([r["est_x"] for r in rs])
+        ey = np.array([r["est_y"] for r in rs])
+        err = np.hypot(ex - tx, ey - ty)
+        dx_arr = np.array([r["dx"] for r in rs])
+        dy_arr = np.array([r["dy"] for r in rs])
+
+        truth_to_cell = {(round(c["x"], 4), round(c["y"], 4)): c for c in cells}
+
+        n_heard = []
+        d_nearest = []
+        for txi, tyi in zip(tx, ty):
+            cell = truth_to_cell.get((round(float(txi), 4), round(float(tyi), 4)))
+            if cell is None:
+                n_heard.append(np.nan)
+            else:
+                n_heard.append(sum(1 for v in cell["beacons"].values()
+                                   if v is not None))
+            dmin = min((math.hypot(float(txi) - b["x"], float(tyi) - b["y"])
+                        for b in beacons), default=np.nan)
+            d_nearest.append(dmin)
+        n_heard = np.array(n_heard, dtype=float)
+        d_nearest = np.array(d_nearest, dtype=float)
+
+        # ── 9. error vs # beacons heard ───────────────────────────
+        if np.isfinite(n_heard).any():
+            fig, ax = plt.subplots(figsize=(9, 5.5))
+            ax.scatter(n_heard, err, s=40, alpha=0.6,
+                       color="#4C78A8", edgecolors="black", linewidths=0.4)
+            uniq = np.array(sorted({int(v) for v in n_heard
+                                    if np.isfinite(v)}))
+            med = [np.median(err[n_heard == k]) for k in uniq]
+            ax.plot(uniq, med, color="#D62728", linewidth=2, marker="o",
+                    label="Median error")
+            ax.set_xlabel("Number of beacons heard at the truth cell")
+            ax.set_ylabel("LOO position error (m)")
+            ax.set_title("Position error vs. beacon visibility")
+            ax.grid(True, alpha=0.3)
+            ax.legend()
+            plt.tight_layout()
+            plt.savefig(os.path.join(PLOTS_DIR, "09_error_vs_beacons_heard.png"),
+                        dpi=DPI)
+            plt.close()
+            print("  wrote 09_error_vs_beacons_heard.png")
+
+        # ── 10. error vs distance to nearest beacon ───────────────
+        if np.isfinite(d_nearest).any():
+            fig, ax = plt.subplots(figsize=(9, 5.5))
+            ax.scatter(d_nearest, err, s=40, alpha=0.6,
+                       color="#4C78A8", edgecolors="black", linewidths=0.4)
+            if len(d_nearest) >= 3:
+                order = np.argsort(d_nearest)
+                # Coarse running median in 5 bins along distance.
+                bins = np.linspace(d_nearest.min(), d_nearest.max(), 6)
+                centers, meds = [], []
+                for lo, hi in zip(bins[:-1], bins[1:]):
+                    sel = (d_nearest >= lo) & (d_nearest <= hi)
+                    if sel.any():
+                        centers.append(0.5 * (lo + hi))
+                        meds.append(np.median(err[sel]))
+                if centers:
+                    ax.plot(centers, meds, color="#D62728", linewidth=2,
+                            marker="o", label="Binned median")
+                    ax.legend()
+            ax.set_xlabel("Distance from truth cell to nearest beacon (m)")
+            ax.set_ylabel("LOO position error (m)")
+            ax.set_title("Position error vs. distance to nearest anchor")
+            ax.grid(True, alpha=0.3)
+            plt.tight_layout()
+            plt.savefig(os.path.join(PLOTS_DIR,
+                                     "10_error_vs_distance_to_nearest.png"),
+                        dpi=DPI)
+            plt.close()
+            print("  wrote 10_error_vs_distance_to_nearest.png")
+
+        # ── 11. residual scatter with R-matrix confidence ellipses ─
+        R = np.array(loo["R"])
+        eigvals, eigvecs = np.linalg.eigh(R)
+        order = np.argsort(eigvals)[::-1]
+        eigvals = eigvals[order]
+        eigvecs = eigvecs[:, order]
+        angle = math.degrees(math.atan2(eigvecs[1, 0], eigvecs[0, 0]))
+        # 2D Gaussian: 1σ ≈ 39%, 2σ ≈ 86%, 3σ ≈ 99% mass containment.
+        try:
+            from matplotlib.patches import Ellipse
+            fig, ax = plt.subplots(figsize=(7.5, 7.5))
+            ax.scatter(dx_arr, dy_arr, s=35, alpha=0.6,
+                       color="#4C78A8", edgecolors="black", linewidths=0.4,
+                       label="Per-cell residual")
+            ax.axhline(0, color="gray", linewidth=0.8)
+            ax.axvline(0, color="gray", linewidth=0.8)
+            for k, color in [(1, "#D62728"), (2, "#F58518"), (3, "#54A24B")]:
+                w = 2 * k * math.sqrt(eigvals[0])
+                h = 2 * k * math.sqrt(eigvals[1])
+                ax.add_patch(Ellipse((0, 0), w, h, angle=angle,
+                                     fill=False, color=color, linewidth=1.8,
+                                     label=f"{k}σ ellipse"))
+            lim = max(np.max(np.abs(dx_arr)), np.max(np.abs(dy_arr))) * 1.15
+            ax.set_xlim(-lim, lim)
+            ax.set_ylim(-lim, lim)
+            ax.set_aspect("equal")
+            ax.set_xlabel("Δx (m)  — estimate minus truth")
+            ax.set_ylabel("Δy (m)")
+            ax.set_title(f"LOO residuals with R-matrix confidence ellipses"
+                         f"  (RMSE = {loo['rmse']:.2f} m)")
+            ax.grid(True, alpha=0.3)
+            ax.legend(loc="upper right", fontsize=9)
+            plt.tight_layout()
+            plt.savefig(os.path.join(PLOTS_DIR, "11_residual_ellipses.png"),
+                        dpi=DPI)
+            plt.close()
+            print("  wrote 11_residual_ellipses.png")
+        except Exception as exc:  # noqa: BLE001
+            print(f"WARNING: residual-ellipse plot failed: {exc}")
+
+    # ── 12. R / Q summary text file ────────────────────────────────
     summary_lines = []
     summary_lines.append("=" * 68)
     summary_lines.append("  BLE FINGERPRINT — R AND Q SUMMARY")

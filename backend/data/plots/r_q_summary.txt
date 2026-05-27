@@ -12,15 +12,15 @@ MEASUREMENT NOISE R (4D KF observes [x, y])
 Estimated from leave-one-out cross-validation on the survey:
 
   R (m^2) =
-  [  17.2520   -0.0537]
-  [  -0.0537   57.7218]
+  [   6.4850    0.1887]
+  [   0.1887   15.2879]
 
-  variance(x) = 17.2520 m^2  -> std(x) = 4.154 m
-  variance(y) = 57.7218 m^2  -> std(y) = 7.597 m
-  covariance  = -0.0537
+  variance(x) = 6.4850 m^2  -> std(x) = 2.547 m
+  variance(y) = 15.2879 m^2  -> std(y) = 3.910 m
+  covariance  = 0.1887
 
-  Match RMSE  = 8.659 m  (n = 91 cells)
-  Mean residual = (+0.016, -0.175) m  (systematic bias)
+  Match RMSE  = 4.666 m  (n = 91 cells)
+  Mean residual = (-0.227, +0.076) m  (systematic bias)
 
 --------------------------------------------------------------------
 PROCESS NOISE Q (constant-velocity, sigma_a = 0.5 m/s^2)

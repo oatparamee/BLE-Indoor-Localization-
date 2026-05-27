@@ -185,6 +185,21 @@ export const api = {
   /** Diagnostic snapshot of the live pipeline (sigma_a, R, r_source, etc.). */
   fpStatus: (session_id?: string) => get(withSession('/fp/status', session_id)),
 
+  /** Classify an RSSI vector as 6F vs 8F using the BCPro_2 presence detector.
+   *  rssi keys may be a canonical 8F id, the primary name (e.g. "BCPro_2"),
+   *  or any declared alias — the backend resolves them. */
+  floorDetect: (
+    rssi: Record<string, number | null>,
+    threshold_dbm?: number,
+  ) =>
+    post('/floor/detect', {rssi, ...(threshold_dbm !== undefined ? {threshold_dbm} : {})}) as Promise<{
+      floor: 6 | 8 | null;
+      on_8f: boolean;
+      threshold_dbm: number;
+      bcpro_2_rssi: number | null;
+      reason?: string;
+    }>,
+
   /** Live-tune sigma_a (Q) and/or R (2x2). */
   fpParams: (params: {sigma_a?: number; R?: number[][]}, session_id?: string) =>
     post('/fp/params', {...params, session_id}),

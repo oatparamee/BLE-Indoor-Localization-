@@ -34,6 +34,10 @@ import { colors } from '../theme/tokens';
 
 const RSSI_FLUSH_MS = 250;
 const POSITION_POLL_MS = 500;
+const FLOOR_DETECT_MS = 1500;
+const FLOOR_RSSI_FRESHNESS_MS = 3000;
+const FLOOR_VOTE_WINDOW = 5;
+const FLOOR_VOTE_THRESHOLD = 3;
 
 interface LivePositionResult {
   ready: boolean;
@@ -84,6 +88,10 @@ const getPointDistance = (a: MapPoint, b: MapPoint) =>
   Math.hypot(a.x - b.x, a.y - b.y);
 
 const clampUnit = (value: number) => Math.min(1, Math.max(0, value));
+
+function isSelectableNavigationDestination(destination: IndoorDestination) {
+  return destination.floor !== '8F' || destination.id === 'engineering-library';
+}
 
 function toNavigationEndpoint(destination: IndoorDestination): NavigationEndpoint {
   return {
@@ -428,6 +436,16 @@ export function IndoorNavigatorApp() {
   const fpSessionIdRef = useRef(
     `navigation-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
   );
+  const latestRawRssiRef = useRef<Map<string, {rssi: number; ts: number}>>(
+    new Map()
+  );
+  const floorVotesRef = useRef<(6 | 8 | null)[]>([]);
+  const autoFloorRef = useRef<FloorCode | null>(null);
+  const isNavigatingRef = useRef(false);
+  const [detectedFloor, setDetectedFloor] = useState<FloorCode | null>(null);
+  useEffect(() => {
+    isNavigatingRef.current = isNavigating;
+  }, [isNavigating]);
   const deferredMapSearchQuery = useDeferredValue(mapSearchQuery);
   const deferredRoomSearchQuery = useDeferredValue(roomSearchQuery);
 
@@ -469,6 +487,7 @@ export function IndoorNavigatorApp() {
       let unsubscribe: (() => void) | null = null;
       let flushInterval: ReturnType<typeof setInterval> | null = null;
       let pollInterval: ReturnType<typeof setInterval> | null = null;
+      let floorDetectInterval: ReturnType<typeof setInterval> | null = null;
       let beaconList: SavedBeacon[] = [];
       const sessionId = fpSessionIdRef.current;
 
@@ -481,6 +500,13 @@ export function IndoorNavigatorApp() {
           clearInterval(pollInterval);
           pollInterval = null;
         }
+        if (floorDetectInterval) {
+          clearInterval(floorDetectInterval);
+          floorDetectInterval = null;
+        }
+        latestRawRssiRef.current.clear();
+        floorVotesRef.current = [];
+        autoFloorRef.current = null;
         if (unsubscribe) {
           unsubscribe();
           unsubscribe = null;
@@ -517,6 +543,23 @@ export function IndoorNavigatorApp() {
             return;
           }
 
+          // Cache the raw RSSI per advertised key for the floor detector.
+          // We use the BLE-advertised name (e.g. "BCPro_2") so 8F beacons
+          // missing from the 6F config still reach the backend.
+          const nowTs = Date.now();
+          for (const event of events) {
+            const key = event.beacon_name || event.beacon_id;
+            if (!key || typeof event.rssi !== 'number') {
+              continue;
+            }
+            latestRawRssiRef.current.set(key, {rssi: event.rssi, ts: nowTs});
+          }
+          for (const [key, value] of latestRawRssiRef.current) {
+            if (nowTs - value.ts > FLOOR_RSSI_FRESHNESS_MS) {
+              latestRawRssiRef.current.delete(key);
+            }
+          }
+
           const filteredEvents = canonicalizeRawEvents(events, beaconList);
           if (filteredEvents.length === 0) {
             return;
@@ -530,6 +573,52 @@ export function IndoorNavigatorApp() {
             }
           }
         }, RSSI_FLUSH_MS);
+
+        floorDetectInterval = setInterval(async () => {
+          const nowTs = Date.now();
+          const rssi: Record<string, number> = {};
+          for (const [key, value] of latestRawRssiRef.current) {
+            if (nowTs - value.ts <= FLOOR_RSSI_FRESHNESS_MS) {
+              rssi[key] = value.rssi;
+            }
+          }
+          if (Object.keys(rssi).length === 0) {
+            return;
+          }
+
+          let result;
+          try {
+            result = await api.floorDetect(rssi);
+          } catch {
+            return;
+          }
+          if (cancelled) {
+            return;
+          }
+
+          floorVotesRef.current.push(result.floor);
+          if (floorVotesRef.current.length > FLOOR_VOTE_WINDOW) {
+            floorVotesRef.current.shift();
+          }
+          const eightVotes = floorVotesRef.current.filter((v) => v === 8).length;
+          const sixVotes = floorVotesRef.current.filter((v) => v === 6).length;
+          let nextFloor: FloorCode | null = null;
+          if (eightVotes >= FLOOR_VOTE_THRESHOLD) {
+            nextFloor = '8F';
+          } else if (sixVotes >= FLOOR_VOTE_THRESHOLD) {
+            nextFloor = '6F';
+          }
+          if (!nextFloor || nextFloor === autoFloorRef.current) {
+            return;
+          }
+          autoFloorRef.current = nextFloor;
+          setDetectedFloor(nextFloor);
+          // Don't yank the map away while the user is following a route;
+          // the route already drives selectedFloor at transfer points.
+          if (!isNavigatingRef.current) {
+            setSelectedFloor(nextFloor);
+          }
+        }, FLOOR_DETECT_MS);
 
         pollInterval = setInterval(async () => {
           try {
@@ -594,12 +683,13 @@ export function IndoorNavigatorApp() {
       point: topLeftBeacon.point,
     };
   }, [beaconMarkers]);
+  const floorBadge = detectedFloor ? ` [auto-detected ${detectedFloor}]` : '';
   const statusMessage = isNavigating
-    ? navigationRouteStatus
+    ? `${navigationRouteStatus}${floorBadge}`
     : livePosition
-    ? liveStatusMessage
+    ? `${liveStatusMessage}${floorBadge}`
     : beaconMarkers.length > 0
-    ? liveStatusMessage
+    ? `${liveStatusMessage}${floorBadge}`
     : '6F beacon anchors will appear here after beacon setup loads.';
 
   const filteredMaps = useMemo(() => {
@@ -624,7 +714,9 @@ export function IndoorNavigatorApp() {
     }
 
     return indoorDestinations.filter(
-      (destination) => destination.mapId === selectedMap.id
+      (destination) =>
+        destination.mapId === selectedMap.id &&
+        isSelectableNavigationDestination(destination)
     );
   }, [selectedMap]);
 
@@ -830,7 +922,11 @@ export function IndoorNavigatorApp() {
 
   const handleSelectDestination = (destinationId: string) => {
     const destination = destinationById.get(destinationId);
-    if (!destination || destination.mapId !== selectedMapId) {
+    if (
+      !destination ||
+      destination.mapId !== selectedMapId ||
+      !isSelectableNavigationDestination(destination)
+    ) {
       return;
     }
 
