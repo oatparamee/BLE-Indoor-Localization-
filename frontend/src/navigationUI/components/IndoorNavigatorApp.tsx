@@ -21,6 +21,7 @@ import {
   IndoorDestination,
   MapPoint,
   NavigationBeaconMarker,
+  projectSixFloorMapPointToMeters,
   projectSixFloorMeterPointToMap,
   prototypeMaps,
 } from '../data/mockIndoorDestinations';
@@ -38,6 +39,10 @@ const FLOOR_DETECT_MS = 1500;
 const FLOOR_RSSI_FRESHNESS_MS = 3000;
 const FLOOR_VOTE_WINDOW = 5;
 const FLOOR_VOTE_THRESHOLD = 3;
+const DESTINATION_RADIUS_METERS = 5;
+const ARRIVAL_INSIDE_BUFFER_METERS = 2.5;
+const ARRIVAL_DISTANCE_METERS =
+  DESTINATION_RADIUS_METERS - ARRIVAL_INSIDE_BUFFER_METERS;
 
 interface LivePositionResult {
   ready: boolean;
@@ -424,6 +429,9 @@ export function IndoorNavigatorApp() {
   const [mapFocusRequest, setMapFocusRequest] = useState(0);
   const [beaconMarkers, setBeaconMarkers] = useState<NavigationBeaconMarker[]>([]);
   const [livePosition, setLivePosition] = useState<MapPoint | null>(null);
+  const [livePositionMeters, setLivePositionMeters] = useState<MapPoint | null>(
+    null
+  );
   const [navigationRoute, setNavigationRoute] = useState<NavigationRoute | null>(
     null
   );
@@ -442,7 +450,9 @@ export function IndoorNavigatorApp() {
   const floorVotesRef = useRef<(6 | 8 | null)[]>([]);
   const autoFloorRef = useRef<FloorCode | null>(null);
   const isNavigatingRef = useRef(false);
+  const beaconListRef = useRef<SavedBeacon[]>([]);
   const [detectedFloor, setDetectedFloor] = useState<FloorCode | null>(null);
+  const [hasArrived, setHasArrived] = useState(false);
   useEffect(() => {
     isNavigatingRef.current = isNavigating;
   }, [isNavigating]);
@@ -467,7 +477,9 @@ export function IndoorNavigatorApp() {
           return;
         }
 
-        const markers = buildSixFloorNavigationBeaconMarkers(Object.values(config));
+        const beaconList = Object.values(config);
+        const markers = buildSixFloorNavigationBeaconMarkers(beaconList);
+        beaconListRef.current = beaconList;
         setBeaconMarkers(markers);
       })
       .catch(() => {
@@ -518,6 +530,7 @@ export function IndoorNavigatorApp() {
         setLiveStatusMessage('Starting live BLE position...');
         const config = await loadBeaconConfig();
         beaconList = Object.values(config);
+        beaconListRef.current = beaconList;
 
         if (cancelled) {
           return;
@@ -632,6 +645,7 @@ export function IndoorNavigatorApp() {
 
             if (!position.ready || !position.smooth_position) {
               setLivePosition(null);
+              setLivePositionMeters(null);
               setLiveStatusMessage(
                 position.reason ?? 'Waiting for overlapping beacon readings...'
               );
@@ -643,6 +657,7 @@ export function IndoorNavigatorApp() {
               beaconList
             );
             setLivePosition(mapPoint);
+            setLivePositionMeters(position.smooth_position);
             setLiveStatusMessage('Live position constrained to the walkable path.');
           } catch (error: any) {
             if (!cancelled) {
@@ -655,6 +670,7 @@ export function IndoorNavigatorApp() {
       startLivePosition().catch((error: any) => {
         if (!cancelled) {
           setLivePosition(null);
+          setLivePositionMeters(null);
           setLiveStatusMessage(`Live position unavailable: ${error?.message ?? error}`);
         }
       });
@@ -767,8 +783,41 @@ export function IndoorNavigatorApp() {
     [navigationRoute, routeProgress]
   );
 
+  useEffect(() => {
+    if (
+      !isNavigating ||
+      hasArrived ||
+      !visibleDestination ||
+      visibleDestination.floor !== '6F' ||
+      !livePositionMeters
+    ) {
+      return;
+    }
+
+    const destinationMeters = projectSixFloorMapPointToMeters(
+      visibleDestination.mapPoint,
+      beaconListRef.current
+    );
+
+    if (!destinationMeters) {
+      return;
+    }
+
+    const distanceMeters = getPointDistance(livePositionMeters, destinationMeters);
+
+    if (distanceMeters > ARRIVAL_DISTANCE_METERS) {
+      return;
+    }
+
+    setHasArrived(true);
+    setRouteProgress(100);
+    setSelectedFloor(visibleDestination.floor);
+    setNavigationRouteStatus(`You've arrived at ${visibleDestination.name}.`);
+  }, [hasArrived, isNavigating, livePositionMeters, visibleDestination]);
+
   const clearNavigationRoute = () => {
     setNavigationRoute(null);
+    setHasArrived(false);
     setNavigationRouteStatus(
       'Choose a source and destination to route through the walkable path.'
     );
@@ -780,6 +829,7 @@ export function IndoorNavigatorApp() {
   ): Promise<BuiltNavigationRoute | null> => {
     const config = await loadBeaconConfig();
     const beaconList = Object.values(config);
+    beaconListRef.current = beaconList;
     setBeaconMarkers(buildSixFloorNavigationBeaconMarkers(beaconList));
 
     const path = await api.fpPathGet();
@@ -1003,6 +1053,7 @@ export function IndoorNavigatorApp() {
     setSelectedFloor(startPosition.floor);
     setNavigationRoute(builtRoute.route);
     setNavigationRouteStatus(builtRoute.status);
+    setHasArrived(false);
     setIsNavigating(true);
     setActiveStepIndex(0);
     setRouteProgress(0);
