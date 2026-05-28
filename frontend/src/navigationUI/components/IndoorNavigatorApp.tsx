@@ -94,6 +94,11 @@ const EIGHT_FLOOR_BEACON_NAME = 'BCPro_2';
 // count as "still on 8F". Weaker readings are treated as cross-floor
 // leak and cause us to vote 6F so we can exit 8F mode.
 const EIGHT_FLOOR_HOLD_RSSI_DBM = -80;
+// From 6F, BCPro_2 must be heard at least this strongly to short-circuit
+// the fingerprint comparison and vote 8F directly. Stricter than the
+// hold threshold so cross-floor leak (typically <= -80 dBm) doesn't
+// flip us; entering 8F really does require being near BCPro_2.
+const EIGHT_FLOOR_ENTER_RSSI_DBM = -70;
 
 const isEightFloorBeacon = (key: string) =>
   key.toLowerCase() === EIGHT_FLOOR_BEACON_NAME.toLowerCase();
@@ -605,14 +610,20 @@ export function IndoorNavigatorApp() {
           // fades from the fresh buffer, at which point we vote 6 and
           // resume full detection.
           const rssi: Record<string, number> = {};
-          let bcpro2Heard = false;
+          let bcpro2HoldHeard = false;
+          let bcpro2EnterHeard = false;
           for (const [key, value] of latestRawRssiRef.current) {
             if (nowTs - value.ts > FLOOR_RSSI_FRESHNESS_MS) {
               continue;
             }
             const isBcpro2 = isEightFloorBeacon(key);
-            if (isBcpro2 && value.rssi >= EIGHT_FLOOR_HOLD_RSSI_DBM) {
-              bcpro2Heard = true;
+            if (isBcpro2) {
+              if (value.rssi >= EIGHT_FLOOR_HOLD_RSSI_DBM) {
+                bcpro2HoldHeard = true;
+              }
+              if (value.rssi >= EIGHT_FLOOR_ENTER_RSSI_DBM) {
+                bcpro2EnterHeard = true;
+              }
             }
             if (inEightFloorMode && !isBcpro2) {
               continue;
@@ -621,9 +632,15 @@ export function IndoorNavigatorApp() {
           }
 
           let detectedFloorVote: 6 | 8 | null;
-          if (inEightFloorMode && !bcpro2Heard) {
+          if (inEightFloorMode && !bcpro2HoldHeard) {
             // BCPro_2 dropped while we were locked on 8F → treat as 6F.
             detectedFloorVote = 6;
+          } else if (!inEightFloorMode && bcpro2EnterHeard) {
+            // Symmetric to the 8F→6F path: when BCPro_2 is heard
+            // strongly from 6F, vote 8 directly instead of relying on
+            // the fingerprint comparison (which loses to 6F leak when
+            // any 6F beacon is still audible through the floor).
+            detectedFloorVote = 8;
           } else {
             if (Object.keys(rssi).length === 0) {
               return;
