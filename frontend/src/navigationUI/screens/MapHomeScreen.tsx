@@ -112,7 +112,9 @@ export function MapHomeScreen({
 }: Props) {
   const searchIsActive = roomSearchQuery.trim().length > 0;
   const visibleRoomResults = searchIsActive ? roomResults : [];
-  const canStartNavigation = Boolean(destination && livePosition);
+  const liveSourceFloor: FloorCode | null =
+    detectedFloor === '8F' ? '8F' : livePosition ? '6F' : null;
+  const canStartNavigation = Boolean(destination && liveSourceFloor);
   const [hasSearchedRooms, setHasSearchedRooms] = React.useState(false);
   const [floorMenuOpen, setFloorMenuOpen] = React.useState(false);
   const floors: FloorCode[] = ['6F', '8F'];
@@ -165,7 +167,11 @@ export function MapHomeScreen({
         isNavigating={isNavigating}
         navigationRoute={navigationRoute}
         onInteractionStart={dismissTransientUi}
-        focusPoint={livePosition ?? source?.mapPoint ?? currentAnchor.point}
+        focusPoint={
+          (detectedFloor === '8F' ? eightFloorAnchorPoint : livePosition) ??
+          source?.mapPoint ??
+          currentAnchor.point
+        }
         focusRequest={mapFocusRequest}
       />
 
@@ -198,7 +204,9 @@ export function MapHomeScreen({
                 <View style={styles.selectionChip}>
                   <Text style={styles.selectionLabel}>From</Text>
                   <Text numberOfLines={1} style={styles.selectionValue}>
-                    {livePosition ? 'Live position | 6F' : 'Waiting for live dot'}
+                    {liveSourceFloor
+                      ? `Live position | ${liveSourceFloor}`
+                      : 'Waiting for live dot'}
                   </Text>
                 </View>
                 <View style={styles.selectionChip}>

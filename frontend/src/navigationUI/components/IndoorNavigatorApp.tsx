@@ -969,6 +969,41 @@ export function IndoorNavigatorApp() {
     };
   };
 
+  const buildEightToSixNavigationRoute = async (
+    source: NavigationEndpoint,
+    destination: IndoorDestination
+  ): Promise<BuiltNavigationRoute | null> => {
+    const sixFloorElevator = destinationById.get(SIX_FLOOR_ELEVATOR_2_ID);
+    const eightFloorElevator = destinationById.get(EIGHT_FLOOR_ELEVATOR_2_ID);
+
+    if (!sixFloorElevator || !eightFloorElevator) {
+      return null;
+    }
+
+    const eightFloorRoute = buildEightFloorHallwayRoute(
+      source,
+      toNavigationEndpoint(eightFloorElevator)
+    );
+
+    const sixFloorRoute = await buildSixFloorNavigationRoute(
+      toNavigationEndpoint(sixFloorElevator),
+      toNavigationEndpoint(destination)
+    );
+
+    if (!sixFloorRoute) {
+      return null;
+    }
+
+    return {
+      route: mergeRoutes(
+        `route-${source.id}-to-${destination.id}`,
+        `${source.name} to ${destination.name}`,
+        [eightFloorRoute.route, sixFloorRoute.route]
+      ),
+      status: `${source.name} to ${destination.name}: follow the 8F path to Elevator 2, then continue from 6F Elevator 2.`,
+    };
+  };
+
   const handleSelectMap = (mapId: string) => {
     const nextMap = mapById.get(mapId);
     if (!nextMap) {
@@ -1035,20 +1070,38 @@ export function IndoorNavigatorApp() {
   };
 
   const handleStartNavigation = async () => {
-    if (!livePosition || !visibleDestination) {
+    if (!visibleDestination) {
+      return;
+    }
+
+    const onEightFloor = detectedFloor === '8F';
+    const sourceMapPoint = onEightFloor ? EIGHT_FLOOR_LIVE_ANCHOR : livePosition;
+    if (!sourceMapPoint) {
       return;
     }
 
     const liveSource: NavigationEndpoint = {
       id: 'live-position',
       name: 'Current location',
-      floor: '6F',
-      mapPoint: livePosition,
+      floor: onEightFloor ? '8F' : '6F',
+      mapPoint: sourceMapPoint,
     };
     let builtRoute: BuiltNavigationRoute | null = null;
 
     try {
-      if (visibleDestination.floor === '6F') {
+      if (onEightFloor) {
+        if (visibleDestination.floor === '8F') {
+          builtRoute = buildEightFloorHallwayRoute(
+            liveSource,
+            toNavigationEndpoint(visibleDestination)
+          );
+        } else {
+          builtRoute = await buildEightToSixNavigationRoute(
+            liveSource,
+            visibleDestination
+          );
+        }
+      } else if (visibleDestination.floor === '6F') {
         builtRoute = await buildSixFloorNavigationRoute(
           liveSource,
           visibleDestination
