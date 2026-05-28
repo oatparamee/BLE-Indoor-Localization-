@@ -51,6 +51,7 @@ const PINCH_ZOOM_RESPONSE = 0.68;
 const ROTATION_DEAD_ZONE_RAD = Math.PI / 12;
 const ROTATION_RESPONSE = 0.55;
 const ROUTE_STROKE_WIDTH = 18;
+const DEFAULT_OVERVIEW_ZOOM = 1.28;
 
 const floorMapComponents = {
   '6F': Boelter6FMap,
@@ -86,7 +87,7 @@ interface GestureStart {
 const initialViewState: MapViewState = {
   translateX: 0,
   translateY: 0,
-  zoom: 1,
+  zoom: DEFAULT_OVERVIEW_ZOOM,
   rotation: 0,
 };
 
