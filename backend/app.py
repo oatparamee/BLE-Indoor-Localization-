@@ -22,10 +22,11 @@
     GET    /fingerprint/summary      counts + floor RSSI
     POST   /fingerprint/match        one-shot match for an RSSI vector
 
-  8th-floor (single-beacon detector — no fingerprinting on 8F):
+  8th-floor (fingerprint-based floor detector):
     GET    /8f/beacons               list 8F beacons (just BCPro_2)
     POST   /floor/detect             classify an RSSI vector as 6F vs 8F
-                                     based on whether BCPro_2 is heard
+                                     by comparing fingerprint match
+                                     quality on each floor
 
   Live fingerprint pipeline (raw RSSI -> Gaussian match -> 4D KF):
     POST   /fp/start                 begin tracking, optionally seed R via LOO
@@ -70,11 +71,17 @@ survey_collector = SurveyCollector()
 
 # 8th-floor beacon registry. Kept in its own JSON (and as its own
 # BeaconStore instance) so BCPro_2 never leaks into the 6F fingerprint
-# matcher or routing graph. There is intentionally no 8F fingerprint —
-# the only thing we do on 8F is "did we hear BCPro_2?", which is a
-# single-beacon presence check, not a position estimate.
+# matcher or routing graph.
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 beacon_store_8f = BeaconStore(path=os.path.join(DATA_DIR, "beacons_8f.json"))
+
+# 8F fingerprint — read-only at runtime, used by /floor/detect to score
+# the live RSSI vector against an 8F survey alongside the 6F one. No 8F
+# positioning is exposed (frontend pins the dot to Elev 2); we only use
+# fingerprint min-distance as the floor classifier.
+fingerprint_store_8f = FingerprintStore(
+    path=os.path.join(DATA_DIR, "fingerprint_8f.json")
+)
 
 # Walkable-corridor polyline. Read by the live pipeline to clamp the
 # smoothed (x, y) onto the path; exposed over /fp/path so the frontend
@@ -99,6 +106,9 @@ def health():
         "status": "ok",
         "beacons": [b["name"] for b in beacon_store.list()],
         "fingerprint_cells": fingerprint_store.summary().get("cell_count", 0),
+        "fingerprint_cells_8f": fingerprint_store_8f.summary().get(
+            "cell_count", 0
+        ),
         "beacons_8f": [b["name"] for b in beacon_store_8f.list()],
     })
 
@@ -487,43 +497,13 @@ def fingerprint_match_route():
 # out of the elevator?" — a single-beacon presence check. Anything more
 # (position, routing) lives on the 6F side.
 
-# Default RSSI (dBm) above which BCPro_2 alone is enough to call the user
-# "on 8F". Picked to sit comfortably above the cross-floor leak we saw
-# from BCPro_2 when 6F survey cells happened to pick it up (always
-# weaker than ~-90 dBm). Tunable per request via `threshold_dbm`.
-_FLOOR_8F_DETECT_THRESHOLD_DBM = -75.0
-
-
-def _resolve_8f_rssi(rssi_blob) -> "tuple[float | None, bool]":
-    """From an arbitrary {<id|name|alias>: rssi} dict, return the strongest
-    BCPro_2 RSSI and whether ANY non-8F key was present (used as a
-    fallback signal that the user is on 6F).
-
-    Accepts keys in any of these forms because the BLE scanner reports
-    advertising-name and id inconsistently across phones:
-      • canonical id from the 8F registry (UUID string)
-      • primary `name` of an 8F beacon (e.g. "BCPro_2")
-      • any alias declared on an 8F beacon
-    Comparisons against name/alias are case-insensitive.
-
-    Returns (bcpro_2_rssi_or_None, saw_non_8f_key).
-    """
+def _resolve_rssi_for_store(rssi_blob, store: BeaconStore) -> dict:
+    """Map {<id|name|alias>: rssi} → {canonical_id: rssi} using `store`
+    for resolution. Keys the store doesn't recognise are dropped, so
+    each store sees only the beacons it owns."""
     if not isinstance(rssi_blob, dict):
-        return None, False
-
-    eight_f_keys: set = set()
-    for entry in beacon_store_8f.as_dict().values():
-        bid = entry.get("id")
-        if bid:
-            eight_f_keys.add(str(bid))
-        nm = entry.get("name")
-        if nm:
-            eight_f_keys.add(str(nm).strip().lower())
-        for alias in entry.get("aliases", []) or []:
-            eight_f_keys.add(str(alias).strip().lower())
-
-    best: float | None = None
-    saw_other = False
+        return {}
+    out: dict = {}
     for raw_key, v in rssi_blob.items():
         if v is None:
             continue
@@ -531,14 +511,51 @@ def _resolve_8f_rssi(rssi_blob) -> "tuple[float | None, bool]":
             rssi = float(v)
         except (TypeError, ValueError):
             continue
-        key_id = str(raw_key)
-        key_name = key_id.strip().lower()
-        if key_id in eight_f_keys or key_name in eight_f_keys:
-            if best is None or rssi > best:
-                best = rssi
-        else:
-            saw_other = True
-    return best, saw_other
+        key = str(raw_key)
+        entry = store.get(key) or store.find_by_name(key)
+        if not entry:
+            continue
+        canonical = entry.get("id")
+        if not canonical:
+            continue
+        prior = out.get(canonical)
+        if prior is None or rssi > prior:
+            out[canonical] = rssi
+    return out
+
+
+def _score_fingerprint(
+    store: "FingerprintStore", rssi_resolved: dict
+) -> "dict | None":
+    """Score `rssi_resolved` against `store` and return the best-cell
+    per-beacon squared distance plus overlap, or None if the store
+    can't produce a usable match (empty survey, no floor RSSI, no
+    overlap with the live observation).
+
+    The per-beacon normalisation makes scores comparable across stores
+    with different known-beacon set sizes — without it, a sparse 8F
+    fingerprint would always look "closer" just by having fewer terms
+    in the sum.
+    """
+    cells = store.list_cells()
+    floor = store.floor_rssi()
+    known = store.known_beacons()
+    if not cells or floor is None or not known:
+        return None
+    overlap = sum(1 for b in known if b in rssi_resolved)
+    if overlap == 0:
+        return None
+    match_result = fingerprint_match(store, rssi_resolved)
+    if not match_result or not match_result.get("top"):
+        return None
+    top = match_result["top"][0]
+    sq = float(top.get("sq_dist") or 0.0)
+    nb = max(1, int(top.get("n_beacons") or len(known)))
+    return {
+        "per_beacon_sq_dist": round(sq / nb, 4),
+        "n_beacons": nb,
+        "overlap": overlap,
+    }
 
 
 @app.route("/8f/beacons", methods=["GET"])
@@ -548,70 +565,65 @@ def beacons_list_8f():
 
 @app.route("/floor/detect", methods=["POST"])
 def floor_detect():
-    """Classify an RSSI vector as 6F vs 8F based on a BCPro_2 presence
-    check.
+    """Classify an RSSI vector as 6F vs 8F by scoring it against the
+    per-floor fingerprints and picking the floor whose best cell has
+    the lower per-beacon squared distance.
 
     Body:
-        {
-          "rssi": {"<beacon_id_or_name>": -65, ...},
-          "threshold_dbm": -75   // optional; defaults to -75
-        }
+        {"rssi": {"<beacon_id_or_name>": -65, ...}}
 
     Keys in `rssi` may be canonical beacon ids OR advertised names OR
-    aliases — the endpoint resolves any form against the 8F registry.
+    aliases — each side is resolved through its own BeaconStore, so a
+    name only known to the 8F registry never lands in the 6F score and
+    vice versa.
 
     Returns:
         {
           "floor": 8 | 6 | null,
           "on_8f": true | false,
-          "bcpro_2_rssi": -58.4 | null,
-          "threshold_dbm": -75.0,
+          "score_6f": {"per_beacon_sq_dist": float, "n_beacons": int, "overlap": int} | null,
+          "score_8f": {"per_beacon_sq_dist": float, "n_beacons": int, "overlap": int} | null,
           "reason": "..."
         }
 
     Decision:
-        BCPro_2 RSSI >= threshold      -> 8F
-        BCPro_2 below threshold but
-        some other beacon was observed -> 6F
-        no readings at all             -> null (unknown)
+        Both stores score    -> floor with lower per-beacon sq_dist (6F on tie)
+        Only one store scores -> that floor
+        Neither stores scores -> null (unknown)
     """
     data = request.get_json(force=True) or {}
+    rssi_blob = data.get("rssi")
 
-    try:
-        threshold = float(
-            data.get("threshold_dbm", _FLOOR_8F_DETECT_THRESHOLD_DBM)
-        )
-    except (TypeError, ValueError):
-        return jsonify({"error": "threshold_dbm must be numeric"}), 400
+    rssi_6f = _resolve_rssi_for_store(rssi_blob, beacon_store)
+    rssi_8f = _resolve_rssi_for_store(rssi_blob, beacon_store_8f)
 
-    bcpro_2_rssi, saw_other = _resolve_8f_rssi(data.get("rssi"))
+    score_6f = _score_fingerprint(fingerprint_store, rssi_6f)
+    score_8f = _score_fingerprint(fingerprint_store_8f, rssi_8f)
 
-    if bcpro_2_rssi is not None and bcpro_2_rssi >= threshold:
-        floor = 8
-        reason = (
-            f"BCPro_2 RSSI {bcpro_2_rssi:.1f} dBm >= threshold "
-            f"{threshold:.1f} dBm"
-        )
-    elif saw_other:
-        floor = 6
-        reason = "BCPro_2 not heard above threshold; other beacons observed"
-    elif bcpro_2_rssi is not None:
-        # We heard BCPro_2 but only weakly — most likely cross-floor leak
-        # from the 6F side, so report 6F rather than unknown.
-        floor = 6
-        reason = (
-            f"BCPro_2 RSSI {bcpro_2_rssi:.1f} dBm below threshold "
-            f"{threshold:.1f} dBm; treating as 6F"
-        )
-    else:
+    if score_6f is None and score_8f is None:
         floor = None
-        reason = "no readings"
+        reason = "no fingerprint overlap on either floor"
+    elif score_8f is None:
+        floor = 6
+        reason = "no 8F overlap; 6F-only match"
+    elif score_6f is None:
+        floor = 8
+        reason = "no 6F overlap; 8F-only match"
+    else:
+        d6 = score_6f["per_beacon_sq_dist"]
+        d8 = score_8f["per_beacon_sq_dist"]
+        if d8 < d6:
+            floor = 8
+            reason = f"8F best-cell sq_dist {d8:.2f} < 6F {d6:.2f}"
+        else:
+            floor = 6
+            reason = f"6F best-cell sq_dist {d6:.2f} <= 8F {d8:.2f}"
 
     return jsonify({
         "floor": floor,
         "on_8f": floor == 8,
-        "bcpro_2_rssi": bcpro_2_rssi,
-        "threshold_dbm": threshold,
+        "score_6f": score_6f,
+        "score_8f": score_8f,
         "reason": reason,
     })
 
