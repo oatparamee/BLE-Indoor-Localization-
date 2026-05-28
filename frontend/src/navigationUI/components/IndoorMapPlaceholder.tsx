@@ -549,21 +549,21 @@ export function IndoorMapPlaceholder({
               cy={livePositionPoint.y}
               fill="#2563EB"
               fillOpacity={0.18}
-              r={42}
+              r={32}
             />
             <Circle
               cx={livePositionPoint.x}
               cy={livePositionPoint.y}
               fill="#2563EB"
-              r={17}
+              r={13}
               stroke="#FFFFFF"
-              strokeWidth={7}
+              strokeWidth={5}
             />
             <Circle
               cx={livePositionPoint.x}
               cy={livePositionPoint.y}
               fill="#DBEAFE"
-              r={6}
+              r={4}
             />
           </Svg>
         ) : null}
