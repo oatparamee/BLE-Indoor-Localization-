@@ -1023,45 +1023,13 @@ export function IndoorNavigatorApp() {
     }
 
     setSelectedFloor(
-      isNavigating
-        ? routePosition?.floor ?? selectedFloor
-        : livePosition
+      livePosition
         ? '6F'
+        : isNavigating
+        ? routePosition?.floor ?? selectedFloor
         : visibleSource!.floor
     );
     setMapFocusRequest((request) => request + 1);
-  };
-
-  const handleChangeRouteProgress = (progress: number) => {
-    if (!navigationRoute) {
-      return;
-    }
-
-    const nextProgress = Math.min(100, Math.max(0, progress));
-    const nextPosition = getRoutePositionAtProgress(
-      navigationRoute,
-      nextProgress
-    );
-
-    setRouteProgress(nextProgress);
-    setSelectedFloor(nextPosition.floor);
-  };
-
-  const handleStepRouteProgress = (delta: number) => {
-    if (!navigationRoute) {
-      return;
-    }
-
-    setRouteProgress((currentProgress) => {
-      const nextProgress = Math.min(100, Math.max(0, currentProgress + delta));
-      const nextPosition = getRoutePositionAtProgress(
-        navigationRoute,
-        nextProgress
-      );
-
-      setSelectedFloor(nextPosition.floor);
-      return nextProgress;
-    });
   };
 
   return (
@@ -1089,9 +1057,7 @@ export function IndoorNavigatorApp() {
           isLocating={false}
           isNavigating={isNavigating}
           activeStepIndex={activeStepIndex}
-          routeProgress={routeProgress}
           navigationRoute={isNavigating ? navigationRoute : null}
-          routePosition={isNavigating ? routePosition : null}
           onSelectMap={handleSelectMap}
           onClearMapSelection={handleClearMapSelection}
           onSelectSource={handleSelectSource}
@@ -1099,8 +1065,6 @@ export function IndoorNavigatorApp() {
           onStartNavigation={handleStartNavigation}
           onStopNavigation={handleStopNavigation}
           onRefocusNavigation={handleRefocusNavigation}
-          onChangeRouteProgress={handleChangeRouteProgress}
-          onStepRouteProgress={handleStepRouteProgress}
           mapFocusRequest={mapFocusRequest}
         />
       </View>

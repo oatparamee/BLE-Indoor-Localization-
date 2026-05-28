@@ -17,11 +17,11 @@ import {
   NavigationBeaconMarker,
 } from '../data/mockIndoorDestinations';
 import {getRouteSegmentForFloor} from '../data/mockRoutes';
-import type {NavigationRoute, RoutePosition} from '../data/mockRoutes';
+import type {NavigationRoute} from '../data/mockRoutes';
 import { radii } from '../theme/tokens';
 import Boelter6FMap from '../../assets/maps/boelter-6f.svg';
 import Boelter8FMap from '../../assets/maps/boelter-8f.svg';
-import Svg, {Circle, G, Path, Polygon, Text as SvgText} from 'react-native-svg';
+import Svg, {Circle, G, Path, Text as SvgText} from 'react-native-svg';
 
 interface Props {
   floor: FloorCode;
@@ -32,9 +32,7 @@ interface Props {
   zoneName: string;
   showRooms?: boolean;
   isNavigating: boolean;
-  routeProgress: number;
   navigationRoute?: NavigationRoute | null;
-  routePosition?: RoutePosition | null;
   style?: StyleProp<ViewStyle>;
   onInteractionStart?: () => void;
   focusPoint?: MapPoint | null;
@@ -52,7 +50,6 @@ const PINCH_ZOOM_RESPONSE = 0.68;
 const ROTATION_DEAD_ZONE_RAD = Math.PI / 12;
 const ROTATION_RESPONSE = 0.55;
 const ROUTE_STROKE_WIDTH = 18;
-const ROUTE_ARROW_SIZE = 50;
 
 const floorMapComponents = {
   '6F': Boelter6FMap,
@@ -172,7 +169,6 @@ export function IndoorMapPlaceholder({
   floor,
   isNavigating,
   navigationRoute = null,
-  routePosition = null,
   style,
   onInteractionStart,
   focusPoint,
@@ -228,14 +224,6 @@ export function IndoorMapPlaceholder({
         }`;
       })
       .join(' ') ?? '';
-  const routePointerPoint =
-    isNavigating && routePosition?.floor === floor
-      ? getRenderedMapPoint(routePosition.point)
-      : null;
-  const routePointerRotation =
-    routePosition?.headingRadians === undefined
-      ? 0
-      : (routePosition.headingRadians * 180) / Math.PI;
   const visibleBeaconMarkers = beaconMarkers.filter((marker) => marker.floor === floor);
   const livePositionPoint =
     livePosition && floor === '6F' ? getRenderedMapPoint(livePosition) : null;
@@ -500,18 +488,6 @@ export function IndoorMapPlaceholder({
               strokeLinejoin="round"
               strokeWidth={ROUTE_STROKE_WIDTH}
             />
-            {routePointerPoint ? (
-              <G
-                transform={`translate(${routePointerPoint.x} ${routePointerPoint.y}) rotate(${routePointerRotation})`}
-              >
-                <Circle fill="#FFFFFF" r={ROUTE_ARROW_SIZE * 0.62} />
-                <Circle fill="#2F7E73" r={ROUTE_ARROW_SIZE * 0.48} />
-                <Polygon
-                  fill="#FFFFFF"
-                  points={`${ROUTE_ARROW_SIZE * 0.35},0 ${-ROUTE_ARROW_SIZE * 0.22},${-ROUTE_ARROW_SIZE * 0.24} ${-ROUTE_ARROW_SIZE * 0.08},0 ${-ROUTE_ARROW_SIZE * 0.22},${ROUTE_ARROW_SIZE * 0.24}`}
-                />
-              </G>
-            ) : null}
           </Svg>
         ) : null}
         {visibleBeaconMarkers.length > 0 ? (
