@@ -241,4 +241,31 @@ export const api = {
       reachable: boolean;
       reason?: string;
     }>,
+
+  // ── Testing screen — persisted position recordings ───────────────
+
+  /** Persist one 'Position Recording' run from the testing screen.
+   *  Backend writes it to `backend/data/test_recordings/<timestamp>.json`. */
+  testRecordingSave: (payload: {
+    session_id?: string;
+    started_at?: number;
+    stopped_at?: number;
+    stats?: {
+      totalDistance?: number;
+      displacement?: number;
+      elapsedSeconds?: number;
+      sampleCount?: number;
+    };
+    samples: {
+      meters: {x: number; y: number};
+      mapPoint: {x: number; y: number};
+      timestamp: number;
+    }[];
+  }) =>
+    post('/test/recordings', payload) as Promise<{
+      status: string;
+      filename: string;
+      path: string;
+      sample_count: number;
+    }>,
 };

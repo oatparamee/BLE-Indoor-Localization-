@@ -41,8 +41,12 @@
 ==========================================================================
 """
 
+import json
 import os
+import re
 import threading
+import time
+from datetime import datetime
 
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -75,6 +79,13 @@ survey_collector = SurveyCollector()
 # single-beacon presence check, not a position estimate.
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 beacon_store_8f = BeaconStore(path=os.path.join(DATA_DIR, "beacons_8f.json"))
+
+# Per-stop recording dumps from the testing screen ("Position Recording"
+# panel in IndoorNavigatorAppTest). Each Stop press writes one JSON file
+# here so the team can replay/inspect a walk after the fact.
+TEST_RECORDINGS_DIR = os.path.join(DATA_DIR, "test_recordings")
+os.makedirs(TEST_RECORDINGS_DIR, exist_ok=True)
+_test_recording_lock = threading.Lock()
 
 # Walkable-corridor polyline. Read by the live pipeline to clamp the
 # smoothed (x, y) onto the path; exposed over /fp/path so the frontend
@@ -937,6 +948,84 @@ def fp_r_estimate():
             "reason": "need at least 4 surveyed cells",
         })
     return jsonify({"ready": True, **estimate})
+
+
+# ---------- Test recordings (Stop press in testing screen) ----------
+
+_SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def _safe_name_fragment(value, fallback: str = "session") -> str:
+    """Slugify an arbitrary string so it is safe to put in a filename."""
+    if value is None:
+        return fallback
+    text = _SAFE_NAME_RE.sub("-", str(value)).strip("-")
+    return text[:64] if text else fallback
+
+
+@app.route("/test/recordings", methods=["POST"])
+def test_recordings_save():
+    """Persist a single 'Position Recording' run from the testing screen.
+
+    Body:
+        {
+          "session_id": "test-navigation-...",   // optional
+          "started_at": 1717000000000,           // ms epoch, optional
+          "stopped_at": 1717000060000,           // ms epoch, optional
+          "samples": [
+            {
+              "meters":   {"x": 1.2, "y": 3.4},
+              "mapPoint": {"x": 50,  "y": 70},
+              "timestamp": 1717000000123
+            },
+            ...
+          ],
+          "stats": {                             // optional, frontend-computed
+            "totalDistance": 12.3,
+            "displacement": 4.5,
+            "elapsedSeconds": 60.0,
+            "sampleCount": 120
+          }
+        }
+
+    Returns the saved filename + path so the frontend can confirm it landed.
+    """
+    data = request.get_json(force=True) or {}
+    samples = data.get("samples")
+    if not isinstance(samples, list):
+        return jsonify({"error": "samples list required"}), 400
+
+    started_at = data.get("started_at")
+    stopped_at = data.get("stopped_at") or int(time.time() * 1000)
+    session_id = data.get("session_id")
+
+    timestamp_label = datetime.utcfromtimestamp(stopped_at / 1000.0).strftime(
+        "%Y%m%dT%H%M%SZ"
+    )
+    filename = (
+        f"recording-{timestamp_label}-{_safe_name_fragment(session_id)}.json"
+    )
+
+    payload = {
+        "session_id": session_id,
+        "started_at": started_at,
+        "stopped_at": stopped_at,
+        "saved_at": int(time.time() * 1000),
+        "stats": data.get("stats") or {},
+        "samples": samples,
+    }
+
+    file_path = os.path.join(TEST_RECORDINGS_DIR, filename)
+    with _test_recording_lock:
+        with open(file_path, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, indent=2)
+
+    return jsonify({
+        "status": "saved",
+        "filename": filename,
+        "path": file_path,
+        "sample_count": len(samples),
+    })
 
 
 # ---------- Run ----------

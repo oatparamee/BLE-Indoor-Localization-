@@ -1109,13 +1109,55 @@ export function IndoorNavigatorAppTest() {
     });
   };
 
+  const recordingStartedAtRef = useRef<number | null>(null);
+  const [lastSavedRecording, setLastSavedRecording] = useState<string | null>(
+    null
+  );
+
   const handleStartRecording = () => {
     setRecordingSamples([]);
+    setLastSavedRecording(null);
+    recordingStartedAtRef.current = Date.now();
     setIsRecording(true);
   };
 
   const handleStopRecording = () => {
     setIsRecording(false);
+
+    if (recordingSamples.length === 0) {
+      recordingStartedAtRef.current = null;
+      return;
+    }
+
+    const startedAt =
+      recordingStartedAtRef.current ?? recordingSamples[0].timestamp;
+    const stoppedAt = Date.now();
+
+    api
+      .testRecordingSave({
+        session_id: fpSessionIdRef.current,
+        started_at: startedAt,
+        stopped_at: stoppedAt,
+        stats: {
+          totalDistance,
+          displacement,
+          elapsedSeconds,
+          sampleCount: recordingSamples.length,
+        },
+        samples: recordingSamples,
+      })
+      .then((result) => {
+        setLastSavedRecording(result.filename);
+        setLiveStatusMessage(`Recording saved as ${result.filename}.`);
+      })
+      .catch((error: any) => {
+        setLastSavedRecording(null);
+        setLiveStatusMessage(
+          `Recording save failed: ${error?.message ?? error}`,
+        );
+      });
+
+    recordingStartedAtRef.current = null;
   };
 
   const handleClearRecording = () => {
@@ -1285,6 +1327,12 @@ export function IndoorNavigatorAppTest() {
                 </Text>
               </Pressable>
             </View>
+
+            {lastSavedRecording ? (
+              <Text style={styles.recordingSavedText} numberOfLines={1}>
+                Saved: {lastSavedRecording}
+              </Text>
+            ) : null}
           </View>
         </View>
       </View>
@@ -1411,5 +1459,11 @@ const styles = StyleSheet.create({
   },
   recordingButtonTextDisabled: {
     color: colors.textMuted,
+  },
+  recordingSavedText: {
+    marginTop: spacing.xs,
+    color: colors.textMuted,
+    fontSize: typography.eyebrow,
+    fontWeight: '600',
   },
 });
