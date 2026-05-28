@@ -87,6 +87,8 @@ const EIGHT_FLOOR_ELEVATOR_2_ID = '8f-elevator-2';
 const getVerticalTransferPoint = (floor: FloorCode): MapPoint =>
   floor === '6F' ? {x: 77, y: 24} : {x: 66, y: 34};
 
+const EIGHT_FLOOR_LIVE_ANCHOR: MapPoint = {x: 66, y: 36};
+
 const getPointDistance = (a: MapPoint, b: MapPoint) =>
   Math.hypot(a.x - b.x, a.y - b.y);
 
@@ -1097,6 +1099,10 @@ export function IndoorNavigatorApp() {
           currentAnchor={currentAnchor}
           beaconMarkers={beaconMarkers}
           livePosition={livePosition}
+          eightFloorAnchorPoint={
+            detectedFloor === '8F' ? EIGHT_FLOOR_LIVE_ANCHOR : null
+          }
+          detectedFloor={detectedFloor}
           source={visibleSource}
           destination={visibleDestination}
           selectedFloor={selectedFloor}

@@ -29,6 +29,7 @@ interface Props {
   destination: IndoorDestination | null;
   beaconMarkers?: NavigationBeaconMarker[];
   livePosition?: MapPoint | null;
+  eightFloorAnchorPoint?: MapPoint | null;
   zoneName: string;
   showRooms?: boolean;
   isNavigating: boolean;
@@ -175,6 +176,7 @@ export function IndoorMapPlaceholder({
   focusRequest = 0,
   focusZoom = DEFAULT_FOCUS_ZOOM,
   livePosition = null,
+  eightFloorAnchorPoint = null,
 }: Props) {
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const [frameSize, setFrameSize] = useState({
@@ -226,7 +228,11 @@ export function IndoorMapPlaceholder({
       .join(' ') ?? '';
   const visibleBeaconMarkers = beaconMarkers.filter((marker) => marker.floor === floor);
   const livePositionPoint =
-    livePosition && floor === '6F' ? getRenderedMapPoint(livePosition) : null;
+    livePosition && floor === '6F'
+      ? getRenderedMapPoint(livePosition)
+      : eightFloorAnchorPoint && floor === '8F'
+      ? getRenderedMapPoint(eightFloorAnchorPoint)
+      : null;
 
   const updateViewState = useCallback((nextViewState: MapViewState) => {
     viewStateRef.current = nextViewState;

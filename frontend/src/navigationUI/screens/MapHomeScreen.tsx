@@ -67,6 +67,8 @@ interface Props {
   currentAnchor: CurrentAnchor;
   beaconMarkers: NavigationBeaconMarker[];
   livePosition: MapPoint | null;
+  eightFloorAnchorPoint: MapPoint | null;
+  detectedFloor: FloorCode | null;
   source: IndoorDestination | null;
   destination: IndoorDestination | null;
   selectedFloor: FloorCode;
@@ -93,6 +95,8 @@ export function MapHomeScreen({
   currentAnchor,
   beaconMarkers,
   livePosition,
+  eightFloorAnchorPoint,
+  detectedFloor,
   source,
   destination,
   selectedFloor,
@@ -155,6 +159,7 @@ export function MapHomeScreen({
         destination={destination}
         beaconMarkers={beaconMarkers}
         livePosition={livePosition}
+        eightFloorAnchorPoint={eightFloorAnchorPoint}
         zoneName="Boelter 6F to 8F"
         showRooms
         isNavigating={isNavigating}
@@ -163,6 +168,14 @@ export function MapHomeScreen({
         focusPoint={livePosition ?? source?.mapPoint ?? currentAnchor.point}
         focusRequest={mapFocusRequest}
       />
+
+      {detectedFloor === '8F' ? (
+        <View pointerEvents="none" style={styles.floorBannerOverlay}>
+          <View style={styles.floorBanner}>
+            <Text style={styles.floorBannerText}>You're on 8th floor</Text>
+          </View>
+        </View>
+      ) : null}
 
       {!isNavigating ? (
         <View style={styles.searchOverlay}>
@@ -397,6 +410,27 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     fontSize: typography.section,
     fontWeight: '800',
+  },
+  floorBannerOverlay: {
+    position: 'absolute',
+    left: spacing.md,
+    right: spacing.md,
+    bottom: 96,
+    alignItems: 'center',
+  },
+  floorBanner: {
+    borderRadius: radii.md,
+    backgroundColor: 'rgba(37, 99, 235, 0.95)',
+    borderWidth: 1,
+    borderColor: '#1D4ED8',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    ...shadows,
+  },
+  floorBannerText: {
+    color: '#FFFFFF',
+    fontSize: typography.body,
+    fontWeight: '700',
   },
   selectionStack: {
     marginTop: spacing.sm,
