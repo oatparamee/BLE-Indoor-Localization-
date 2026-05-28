@@ -40,9 +40,7 @@ const FLOOR_RSSI_FRESHNESS_MS = 3000;
 const FLOOR_VOTE_WINDOW = 5;
 const FLOOR_VOTE_THRESHOLD = 3;
 const DESTINATION_RADIUS_METERS = 5;
-const ARRIVAL_INSIDE_BUFFER_METERS = 2.5;
-const ARRIVAL_DISTANCE_METERS =
-  DESTINATION_RADIUS_METERS - ARRIVAL_INSIDE_BUFFER_METERS;
+const ARRIVAL_DISTANCE_METERS = DESTINATION_RADIUS_METERS;
 
 interface LivePositionResult {
   ready: boolean;
@@ -788,7 +786,6 @@ export function IndoorNavigatorApp() {
       !isNavigating ||
       hasArrived ||
       !visibleDestination ||
-      visibleDestination.floor !== '6F' ||
       !livePositionMeters
     ) {
       return;
