@@ -87,7 +87,16 @@ const EIGHT_FLOOR_ELEVATOR_2_ID = '8f-elevator-2';
 const getVerticalTransferPoint = (floor: FloorCode): MapPoint =>
   floor === '6F' ? {x: 77, y: 24} : {x: 66, y: 34};
 
-const EIGHT_FLOOR_LIVE_ANCHOR: MapPoint = {x: 68.5, y: 31.9};
+const EIGHT_FLOOR_LIVE_ANCHOR: MapPoint = {x: 69.8, y: 31.9};
+
+const EIGHT_FLOOR_BEACON_NAME = 'BCPro_2';
+// While locked on 8F, BCPro_2 has to be heard at least this strongly to
+// count as "still on 8F". Weaker readings are treated as cross-floor
+// leak and cause us to vote 6F so we can exit 8F mode.
+const EIGHT_FLOOR_HOLD_RSSI_DBM = -80;
+
+const isEightFloorBeacon = (key: string) =>
+  key.toLowerCase() === EIGHT_FLOOR_BEACON_NAME.toLowerCase();
 
 const getPointDistance = (a: MapPoint, b: MapPoint) =>
   Math.hypot(a.x - b.x, a.y - b.y);
@@ -589,27 +598,49 @@ export function IndoorNavigatorApp() {
 
         floorDetectInterval = setInterval(async () => {
           const nowTs = Date.now();
+          const inEightFloorMode = autoFloorRef.current === '8F';
+          // While locked on 8F we only listen for BCPro_2. Other beacons
+          // (likely 6F leak) are intentionally dropped so they can't
+          // re-flip the detector. We exit 8F only when BCPro_2 itself
+          // fades from the fresh buffer, at which point we vote 6 and
+          // resume full detection.
           const rssi: Record<string, number> = {};
+          let bcpro2Heard = false;
           for (const [key, value] of latestRawRssiRef.current) {
-            if (nowTs - value.ts <= FLOOR_RSSI_FRESHNESS_MS) {
-              rssi[key] = value.rssi;
+            if (nowTs - value.ts > FLOOR_RSSI_FRESHNESS_MS) {
+              continue;
             }
-          }
-          if (Object.keys(rssi).length === 0) {
-            return;
-          }
-
-          let result;
-          try {
-            result = await api.floorDetect(rssi);
-          } catch {
-            return;
-          }
-          if (cancelled) {
-            return;
+            const isBcpro2 = isEightFloorBeacon(key);
+            if (isBcpro2 && value.rssi >= EIGHT_FLOOR_HOLD_RSSI_DBM) {
+              bcpro2Heard = true;
+            }
+            if (inEightFloorMode && !isBcpro2) {
+              continue;
+            }
+            rssi[key] = value.rssi;
           }
 
-          floorVotesRef.current.push(result.floor);
+          let detectedFloorVote: 6 | 8 | null;
+          if (inEightFloorMode && !bcpro2Heard) {
+            // BCPro_2 dropped while we were locked on 8F → treat as 6F.
+            detectedFloorVote = 6;
+          } else {
+            if (Object.keys(rssi).length === 0) {
+              return;
+            }
+            let result;
+            try {
+              result = await api.floorDetect(rssi);
+            } catch {
+              return;
+            }
+            if (cancelled) {
+              return;
+            }
+            detectedFloorVote = result.floor;
+          }
+
+          floorVotesRef.current.push(detectedFloorVote);
           if (floorVotesRef.current.length > FLOOR_VOTE_WINDOW) {
             floorVotesRef.current.shift();
           }
