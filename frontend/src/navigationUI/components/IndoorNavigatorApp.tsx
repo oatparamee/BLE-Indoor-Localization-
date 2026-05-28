@@ -980,10 +980,21 @@ export function IndoorNavigatorApp() {
       return null;
     }
 
-    const eightFloorRoute = buildEightFloorHallwayRoute(
-      source,
-      toNavigationEndpoint(eightFloorElevator)
-    );
+    // Straight-left connector from the fake anchor to the visual Elev 2
+    // entry on 8F — 3 m left = ~3.79% in x at the shared 6F/8F map
+    // scale. Using the hallway router would aim at the data point
+    // (66, 34) which renders inside the Stairs 2 box.
+    const elev2EntryOnEight: MapPoint = {
+      x: source.mapPoint.x - 3.79,
+      y: source.mapPoint.y,
+    };
+    const eightFloorSegmentRoute: NavigationRoute = {
+      id: `route-${source.id}-to-${eightFloorElevator.id}`,
+      name: `${source.name} to ${eightFloorElevator.name}`,
+      segments: [
+        {floor: '8F', points: [source.mapPoint, elev2EntryOnEight]},
+      ],
+    };
 
     const sixFloorRoute = await buildSixFloorNavigationRoute(
       toNavigationEndpoint(sixFloorElevator),
@@ -998,7 +1009,7 @@ export function IndoorNavigatorApp() {
       route: mergeRoutes(
         `route-${source.id}-to-${destination.id}`,
         `${source.name} to ${destination.name}`,
-        [eightFloorRoute.route, sixFloorRoute.route]
+        [eightFloorSegmentRoute, sixFloorRoute.route]
       ),
       status: `${source.name} to ${destination.name}: follow the 8F path to Elevator 2, then continue from 6F Elevator 2.`,
     };
