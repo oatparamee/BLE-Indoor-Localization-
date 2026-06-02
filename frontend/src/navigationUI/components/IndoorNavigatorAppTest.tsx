@@ -35,7 +35,7 @@ import { MapHomeScreen } from '../screens/MapHomeScreen';
 import { colors, radii, shadows, spacing, typography } from '../theme/tokens';
 
 const RSSI_FLUSH_MS = 250;
-const POSITION_POLL_MS = 500;
+const POSITION_POLL_MS = 250;
 const FLOOR_DETECT_MS = 1500;
 const FLOOR_RSSI_FRESHNESS_MS = 3000;
 const FLOOR_VOTE_WINDOW = 5;

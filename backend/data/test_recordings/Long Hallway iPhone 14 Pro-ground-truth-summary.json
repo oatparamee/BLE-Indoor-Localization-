@@ -1,0 +1,83 @@
+{
+  "label": "Long Hallway iPhone 14 Pro",
+  "run_count": 4,
+  "sample_count": 280,
+  "ground_truth": {
+    "start_m": {
+      "x": 34.7,
+      "y": 49.5
+    },
+    "end_m": {
+      "x": 50.3,
+      "y": 49.5
+    },
+    "speed_mps": 1.0,
+    "path_length_m": 15.6,
+    "expected_duration_s": 15.6
+  },
+  "mean_error_m": 7.1371,
+  "rmse_m": 7.9728,
+  "median_error_m": 7.8529,
+  "p90_error_m": 11.4255,
+  "max_error_m": 14.0195,
+  "mean_abs_x_error_m": 7.1371,
+  "mean_abs_y_error_m": 0.0,
+  "runs": [
+    {
+      "run_label": "2",
+      "source_file": "backend/data/test_recordings/Long Hallway iPhone 14 Pro Run 2 (2).json",
+      "session_id": "test-navigation-1780436129536-0vhh6td2",
+      "sample_count": 71,
+      "recorded_duration_s": 17.684,
+      "mean_error_m": 7.2622,
+      "rmse_m": 8.0932,
+      "median_error_m": 8.7863,
+      "p90_error_m": 10.6137,
+      "max_error_m": 12.8829,
+      "mean_abs_x_error_m": 7.2622,
+      "mean_abs_y_error_m": 0.0
+    },
+    {
+      "run_label": "3",
+      "source_file": "backend/data/test_recordings/Long Hallway iPhone 14 Pro Run 3 (2).json",
+      "session_id": "test-navigation-1780436129536-0vhh6td2",
+      "sample_count": 70,
+      "recorded_duration_s": 17.617,
+      "mean_error_m": 6.8958,
+      "rmse_m": 7.6747,
+      "median_error_m": 6.7166,
+      "p90_error_m": 10.9164,
+      "max_error_m": 12.4483,
+      "mean_abs_x_error_m": 6.8958,
+      "mean_abs_y_error_m": 0.0
+    },
+    {
+      "run_label": "4",
+      "source_file": "backend/data/test_recordings/Long Hallway iPhone 14 Pro Run 4 (2).json",
+      "session_id": "test-navigation-1780436129536-0vhh6td2",
+      "sample_count": 69,
+      "recorded_duration_s": 17.029,
+      "mean_error_m": 8.5295,
+      "rmse_m": 8.8321,
+      "median_error_m": 8.7128,
+      "p90_error_m": 10.8031,
+      "max_error_m": 14.0195,
+      "mean_abs_x_error_m": 8.5295,
+      "mean_abs_y_error_m": 0.0
+    },
+    {
+      "run_label": "5",
+      "source_file": "backend/data/test_recordings/Long Hallway iPhone 14 Pro Run 5 (2).json",
+      "session_id": "test-navigation-1780436129536-0vhh6td2",
+      "sample_count": 70,
+      "recorded_duration_s": 17.311,
+      "mean_error_m": 5.8788,
+      "rmse_m": 7.2133,
+      "median_error_m": 4.0073,
+      "p90_error_m": 12.4115,
+      "max_error_m": 13.5092,
+      "mean_abs_x_error_m": 5.8788,
+      "mean_abs_y_error_m": 0.0
+    }
+  ]
+}

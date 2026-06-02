@@ -1,0 +1,83 @@
+{
+  "label": "Long Hallway iPhone 17 Pro Max",
+  "run_count": 4,
+  "sample_count": 255,
+  "ground_truth": {
+    "start_m": {
+      "x": 34.7,
+      "y": 49.5
+    },
+    "end_m": {
+      "x": 50.3,
+      "y": 49.5
+    },
+    "speed_mps": 1.0,
+    "path_length_m": 15.6,
+    "expected_duration_s": 15.6
+  },
+  "mean_error_m": 8.2509,
+  "rmse_m": 8.8443,
+  "median_error_m": 8.6573,
+  "p90_error_m": 12.3652,
+  "max_error_m": 14.0298,
+  "mean_abs_x_error_m": 8.2509,
+  "mean_abs_y_error_m": 0.0,
+  "runs": [
+    {
+      "run_label": "2",
+      "source_file": "backend/data/test_recordings/Long Hallway iPhone 17 Pro Max Run 2.json",
+      "session_id": "test-navigation-1780432868607-xkbppnsk",
+      "sample_count": 61,
+      "recorded_duration_s": 15.768,
+      "mean_error_m": 9.2746,
+      "rmse_m": 9.882,
+      "median_error_m": 9.6733,
+      "p90_error_m": 13.0886,
+      "max_error_m": 14.0298,
+      "mean_abs_x_error_m": 9.2746,
+      "mean_abs_y_error_m": 0.0
+    },
+    {
+      "run_label": "3",
+      "source_file": "backend/data/test_recordings/Long Hallway iPhone 17 Pro Max Run 3.json",
+      "session_id": "test-navigation-1780432868607-xkbppnsk",
+      "sample_count": 65,
+      "recorded_duration_s": 16.855,
+      "mean_error_m": 7.618,
+      "rmse_m": 8.0833,
+      "median_error_m": 8.4473,
+      "p90_error_m": 10.9182,
+      "max_error_m": 11.23,
+      "mean_abs_x_error_m": 7.618,
+      "mean_abs_y_error_m": 0.0
+    },
+    {
+      "run_label": "4",
+      "source_file": "backend/data/test_recordings/Long Hallway iPhone 17 Pro Max Run 4.json",
+      "session_id": "test-navigation-1780432868607-xkbppnsk",
+      "sample_count": 65,
+      "recorded_duration_s": 16.92,
+      "mean_error_m": 8.598,
+      "rmse_m": 9.1849,
+      "median_error_m": 9.026,
+      "p90_error_m": 12.3956,
+      "max_error_m": 13.6738,
+      "mean_abs_x_error_m": 8.598,
+      "mean_abs_y_error_m": 0.0
+    },
+    {
+      "run_label": "5",
+      "source_file": "backend/data/test_recordings/Long Hallway iPhone 17 Pro Max Run 5.json",
+      "session_id": "test-navigation-1780432868607-xkbppnsk",
+      "sample_count": 64,
+      "recorded_duration_s": 16.636,
+      "mean_error_m": 7.5656,
+      "rmse_m": 8.1576,
+      "median_error_m": 7.1817,
+      "p90_error_m": 11.7625,
+      "max_error_m": 12.125,
+      "mean_abs_x_error_m": 7.5656,
+      "mean_abs_y_error_m": 0.0
+    }
+  ]
+}
