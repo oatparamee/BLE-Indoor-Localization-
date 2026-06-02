@@ -2,14 +2,14 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import {api, PersistedBeacon} from '../services/api';
 
 /**
- * Beacon registry — backed by the Flask backend at /beacons (persisted
- * to backend/data/beacons.json). Same exported API as before, so the
- * screens that import this module don't need to change.
+ * Beacon registry facade.
  *
- * AsyncStorage is no longer the source of truth. It stays referenced
- * only for a ONE-TIME migration: if the backend is empty on first load
- * AND AsyncStorage has data from a previous session, we push the local
- * entries up to the backend and then clear the local store.
+ * The underlying api service can be the phone-local backend or the old
+ * Flask fallback. Same exported API as before, so screens that import
+ * this module do not need to know which engine is active.
+ *
+ * AsyncStorage is also checked for a one-time migration from the older
+ * beacon-only local store.
  */
 
 export interface SavedBeacon {
@@ -83,7 +83,7 @@ async function migrateFromAsyncStorageIfNeeded(): Promise<void> {
       try {
         await api.beaconsUpsert(normalize(b));
       } catch {
-        // Backend unavailable — bail and retry next time the screen mounts.
+        // Active backend unavailable - bail and retry next time the screen mounts.
         migrationDone = false;
         return;
       }
@@ -101,7 +101,7 @@ export async function loadBeaconConfig(): Promise<Record<string, SavedBeacon>> {
     const result = await api.beaconsList();
     const beacons = result?.beacons ?? {};
     if (Object.keys(beacons).length === 0) {
-      // Backend empty — see if we have anything to migrate up.
+      // Active backend empty - see if we have anything to migrate up.
       await migrateFromAsyncStorageIfNeeded();
       const after = await api.beaconsList();
       cached = {};
@@ -113,7 +113,7 @@ export async function loadBeaconConfig(): Promise<Record<string, SavedBeacon>> {
       for (const [bid, b] of Object.entries(beacons)) {
         cached[bid] = normalize(b as PersistedBeacon);
       }
-      // Backend is populated — nuke any stale local copy.
+      // Active backend is populated - nuke any stale local copy.
       if (!migrationDone) {
         try {
           await AsyncStorage.removeItem(LEGACY_STORAGE_KEY);
@@ -122,7 +122,7 @@ export async function loadBeaconConfig(): Promise<Record<string, SavedBeacon>> {
       }
     }
   } catch {
-    // Backend unreachable: serve what we have in memory.
+    // Backend unavailable: serve what we have in memory.
   }
   return cached;
 }

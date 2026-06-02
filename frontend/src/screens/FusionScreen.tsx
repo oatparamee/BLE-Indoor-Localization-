@@ -424,9 +424,14 @@ export default function FusionScreen() {
   const MAX_SCALE = 80;
   const svgW = bbox ? (bbox.xMax - bbox.xMin) * mapScale + PADDING * 2 : 240;
   const svgH = bbox ? (bbox.yMax - bbox.yMin) * mapScale + PADDING * 2 : 240;
-  const toSvgX = (x: number) => PADDING + (x - (bbox?.xMin ?? 0)) * mapScale;
-  const toSvgY = (y: number) =>
-    svgH - PADDING - (y - (bbox?.yMin ?? 0)) * mapScale;
+  const toSvgX = useCallback(
+    (x: number) => PADDING + (x - (bbox?.xMin ?? 0)) * mapScale,
+    [bbox?.xMin, mapScale],
+  );
+  const toSvgY = useCallback(
+    (y: number) => svgH - PADDING - (y - (bbox?.yMin ?? 0)) * mapScale,
+    [bbox?.yMin, mapScale, svgH],
+  );
 
   const clampScale = (s: number) =>
     Math.max(MIN_SCALE, Math.min(MAX_SCALE, s));

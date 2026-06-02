@@ -2,9 +2,8 @@
  * ==========================================================================
  *   Tab 4 — Settings Screen
  * ==========================================================================
- *   Lets the user set the backend server IP from within the app.
- *   The URL is saved to AsyncStorage and persists across app restarts.
- *   No code changes needed — just type the IP and tap Save.
+ *   Lets the user choose the phone-local positioning engine or the
+ *   older Flask backend fallback.
  * ==========================================================================
  */
 
@@ -17,11 +16,20 @@ import {
   ScrollView,
   StyleSheet,
 } from 'react-native';
-import {getApiUrl, saveApiUrl, loadApiUrl} from '../config/api';
+import type {ApiMode} from '../config/api';
+import {
+  getApiMode,
+  getApiUrl,
+  loadApiMode,
+  loadApiUrl,
+  saveApiMode,
+  saveApiUrl,
+} from '../config/api';
 import {api} from '../services/api';
 
 export default function SettingsScreen() {
   const [url, setUrl] = useState('');
+  const [mode, setMode] = useState<ApiMode>('local');
   const [saved, setSaved] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<
     'untested' | 'testing' | 'connected' | 'failed'
@@ -29,7 +37,17 @@ export default function SettingsScreen() {
   const [serverInfo, setServerInfo] = useState('');
 
   useEffect(() => {
-    loadApiUrl().then(loaded => setUrl(loaded));
+    Promise.all([loadApiUrl(), loadApiMode()]).then(([loadedUrl, loadedMode]) => {
+      setUrl(loadedUrl);
+      setMode(loadedMode);
+    });
+  }, []);
+
+  const handleModeChange = useCallback(async (nextMode: ApiMode) => {
+    setMode(nextMode);
+    await saveApiMode(nextMode);
+    setConnectionStatus('untested');
+    setServerInfo('');
   }, []);
 
   const handleSave = useCallback(async () => {
@@ -53,7 +71,11 @@ export default function SettingsScreen() {
       const result = await api.health();
       if (result.status === 'ok') {
         setConnectionStatus('connected');
-        setServerInfo(`Beacons: ${result.beacons.join(', ')}`);
+        setServerInfo(
+          mode === 'local'
+            ? `Local engine ready. Beacons: ${result.beacons.join(', ')}`
+            : `Remote backend ready. Beacons: ${result.beacons.join(', ')}`,
+        );
       } else {
         setConnectionStatus('failed');
         setServerInfo('Server responded but status is not ok');
@@ -62,7 +84,7 @@ export default function SettingsScreen() {
       setConnectionStatus('failed');
       setServerInfo(err.message || 'Cannot reach server');
     }
-  }, []);
+  }, [mode]);
 
   const statusColor =
     connectionStatus === 'connected'
@@ -86,34 +108,78 @@ export default function SettingsScreen() {
     <ScrollView style={styles.container}>
       <Text style={styles.title}>Settings</Text>
       <Text style={styles.subtitle}>
-        Configure the backend server address. All phones on the same Wi-Fi
-        connect to the same server.
+        Run positioning on this phone, or switch back to the Flask backend
+        when you want to compare against the laptop server.
       </Text>
 
       <View style={styles.section}>
-        <Text style={styles.label}>Backend Server URL:</Text>
-        <TextInput
-          style={styles.input}
-          value={url}
-          onChangeText={setUrl}
-          placeholder="http://192.168.1.100:5000"
-          placeholderTextColor="#6e7681"
-          autoCapitalize="none"
-          autoCorrect={false}
-          keyboardType="url"
-        />
+        <Text style={styles.label}>Positioning Mode</Text>
+        <View style={styles.modeRow}>
+          <TouchableOpacity
+            style={[
+              styles.modeButton,
+              mode === 'local' && styles.modeButtonActive,
+            ]}
+            onPress={() => handleModeChange('local')}>
+            <Text
+              style={[
+                styles.modeButtonText,
+                mode === 'local' && styles.modeButtonTextActive,
+              ]}>
+              Local Phone
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[
+              styles.modeButton,
+              mode === 'remote' && styles.modeButtonActive,
+            ]}
+            onPress={() => handleModeChange('remote')}>
+            <Text
+              style={[
+                styles.modeButtonText,
+                mode === 'remote' && styles.modeButtonTextActive,
+              ]}>
+              Flask Fallback
+            </Text>
+          </TouchableOpacity>
+        </View>
         <Text style={styles.hint}>
-          Enter the IP of the machine running the Flask backend.{'\n'}
-          Example: http://192.168.1.100:5000
+          Local mode uses bundled fingerprint data and saves edits on this
+          phone. Flask fallback uses the laptop server URL below.
         </Text>
       </View>
 
+      {mode === 'remote' ? (
+        <View style={styles.section}>
+          <Text style={styles.label}>Flask Backend URL:</Text>
+          <TextInput
+            style={styles.input}
+            value={url}
+            onChangeText={setUrl}
+            placeholder="http://192.168.1.100:5001"
+            placeholderTextColor="#6e7681"
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="url"
+          />
+          <Text style={styles.hint}>
+            Enter the IP of the machine running the Flask backend.{'\n'}
+            Example: http://192.168.1.100:5001
+          </Text>
+        </View>
+      ) : null}
+
       <View style={styles.buttonRow}>
-        <TouchableOpacity style={styles.buttonPrimary} onPress={handleSave}>
-          <Text style={styles.buttonText}>Save</Text>
-        </TouchableOpacity>
+        {mode === 'remote' ? (
+          <TouchableOpacity style={styles.buttonPrimary} onPress={handleSave}>
+            <Text style={styles.buttonText}>Save URL</Text>
+          </TouchableOpacity>
+        ) : null}
         <TouchableOpacity style={styles.buttonSecondary} onPress={testConnection}>
-          <Text style={styles.buttonText}>Test Connection</Text>
+          <Text style={styles.buttonText}>
+            {mode === 'local' ? 'Check Local Engine' : 'Test Connection'}
+          </Text>
         </TouchableOpacity>
       </View>
 
@@ -134,17 +200,20 @@ export default function SettingsScreen() {
         {serverInfo ? (
           <Text style={styles.serverInfo}>{serverInfo}</Text>
         ) : null}
-        <Text style={styles.currentUrl}>Current URL: {getApiUrl()}</Text>
+        <Text style={styles.currentUrl}>
+          Current mode: {getApiMode() === 'local' ? 'Local Phone' : 'Flask Fallback'}
+        </Text>
+        {mode === 'remote' ? (
+          <Text style={styles.currentUrl}>Current URL: {getApiUrl()}</Text>
+        ) : null}
       </View>
 
       <View style={styles.helpCard}>
         <Text style={styles.helpTitle}>How it works</Text>
         <Text style={styles.helpText}>
-          1. Start the Flask backend on your PC: python app.py{'\n'}
-          2. Find your PC's IP address (shown in the terminal output){'\n'}
-          3. Enter it above as http://YOUR_IP:5000{'\n'}
-          4. Tap Save, then Test Connection{'\n'}
-          5. All phones use the same server IP — set once per network
+          Local mode keeps BLE scanning, fingerprint matching, Kalman
+          smoothing, survey storage, and routing inside the app.{'\n'}
+          Flask fallback is still available when a laptop backend is running.
         </Text>
       </View>
     </ScrollView>
@@ -190,6 +259,32 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#6e7681',
     marginTop: 6,
+  },
+  modeRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  modeButton: {
+    flex: 1,
+    paddingVertical: 12,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#30363d',
+    backgroundColor: '#161b22',
+    alignItems: 'center',
+  },
+  modeButtonActive: {
+    borderColor: '#58a6ff',
+    backgroundColor: '#10223a',
+  },
+  modeButtonText: {
+    color: '#8b949e',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  modeButtonTextActive: {
+    color: '#e6edf3',
   },
   buttonRow: {
     flexDirection: 'row',

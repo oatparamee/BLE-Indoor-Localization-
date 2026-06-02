@@ -1,4 +1,5 @@
-import {getApiUrl} from '../config/api';
+import {getApiMode, getApiUrl} from '../config/api';
+import {localBackendApi} from './localBackend';
 
 async function parseJsonResponse(res: Response) {
   const text = await res.text();
@@ -86,7 +87,7 @@ export interface RoutePoint {
   y: number;
 }
 
-export const api = {
+const remoteApi = {
   health: () => get('/health'),
 
   // ── Beacons (persistent registry on the backend) ──────────────────
@@ -240,3 +241,13 @@ export const api = {
       reason?: string;
     }>,
 };
+
+export const api = new Proxy(remoteApi, {
+  get(target, prop) {
+    const backend =
+      getApiMode() === 'local'
+        ? (localBackendApi as unknown as typeof remoteApi)
+        : target;
+    return backend[prop as keyof typeof remoteApi];
+  },
+}) as typeof remoteApi;
