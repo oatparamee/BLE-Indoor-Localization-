@@ -1,0 +1,33 @@
+{
+  "label": "Short Hallway 1 iPhone 17 Pro Max Low Sample Run 1",
+  "source_file": "backend/data/test_recordings/Short Hallway 1 iPhone 17 Pro Max.json",
+  "ground_truth": {
+    "start_m": {
+      "x": 1.5,
+      "y": 45.0
+    },
+    "end_m": {
+      "x": 1.5,
+      "y": 30.0
+    },
+    "speed_mps": 1.0,
+    "path_length_m": 15.0,
+    "expected_duration_s": 15.0
+  },
+  "sample_count": 30,
+  "mean_error_m": 2.2727,
+  "rmse_m": 3.2539,
+  "median_error_m": 1.7187,
+  "p90_error_m": 4.1033,
+  "max_error_m": 10.5718,
+  "mean_abs_x_error_m": 0.0,
+  "mean_abs_y_error_m": 2.2727,
+  "recorded_duration_s": 14.687,
+  "initial_error_m": 0.9369,
+  "initial_x_error_m": 0.0,
+  "initial_y_error_m": -0.9369,
+  "first_estimated": {
+    "x": 1.5,
+    "y": 44.0631
+  }
+}

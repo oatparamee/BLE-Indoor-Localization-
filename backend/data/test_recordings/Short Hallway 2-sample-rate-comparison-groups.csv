@@ -1,0 +1,11 @@
+scenario,phone,sample_rate_group,run_count,sample_count,median_sample_rate_hz,mean_initial_error_m,median_initial_error_m,mean_error_m,rmse_m,median_error_m,p90_error_m,max_error_m
+Regular 15m,iPhone 14 Pro,low,5,159,1.996,8.6904,7.6672,8.6731,9.3153,8.7239,13.2844,15.7841
+Regular 15m,iPhone 14 Pro,high,4,268,4.0,6.758,6.0992,7.8094,8.3641,7.8502,11.5134,15.9702
+Regular 15m,iPhone 17 Pro Max,low,1,29,1.965,13.755,13.755,15.7167,16.1507,15.7535,19.6845,23.8448
+Regular 15m,iPhone 17 Pro Max,high,4,248,3.748,14.4125,14.8536,12.0757,12.6797,12.2913,17.3189,22.9346
+Long 30m,iPhone 14 Pro,low,5,312,1.996,12.1854,11.9007,8.8238,9.4562,8.9183,13.1738,15.6816
+Long 30m,iPhone 14 Pro,high,5,639,4.0,12.1606,12.6136,7.5193,8.1099,7.6695,11.4142,14.6403
+Long 30m,iPhone 17 Pro Max,high,5,594,3.745,13.3152,12.5782,10.1524,10.946,10.1175,15.5767,23.0694
+Fast 30m,iPhone 14 Pro,low,5,243,1.998,14.6619,15.7165,7.8221,9.0242,7.508,13.8296,23.578
+Fast 30m,iPhone 14 Pro,high,5,484,3.984,9.8292,9.068,6.2214,7.0091,6.4358,10.0896,14.3929
+Fast 30m,iPhone 17 Pro Max,high,5,462,3.759,14.0104,14.6819,8.8376,9.6515,8.5741,13.9524,19.8761

@@ -1,0 +1,133 @@
+{
+  "label": "Short Hallway 2 30m Fast iPhone 14 Pro",
+  "scenario": "Short Hallway 2 30m Fast",
+  "run_count": 5,
+  "sample_count": 484,
+  "ground_truth": {
+    "start_m": {
+      "x": 70.7,
+      "y": 40.5
+    },
+    "end_m": {
+      "x": 70.7,
+      "y": 10.5
+    },
+    "speed_mps": 1.37,
+    "path_length_m": 30.0,
+    "expected_duration_s": 21.8978
+  },
+  "mean_error_m": 6.2214,
+  "rmse_m": 7.0091,
+  "median_error_m": 6.4359,
+  "p90_error_m": 10.0895,
+  "max_error_m": 14.3929,
+  "mean_abs_x_error_m": 0.0,
+  "mean_abs_y_error_m": 6.2214,
+  "runs": [
+    {
+      "run_label": "1",
+      "source_file": "backend/data/test_recordings/Short Hallway 2 30m Fast iPhone 14 Pro Run 1 (2).json",
+      "session_id": "test-navigation-1780436129536-0vhh6td2",
+      "sample_count": 98,
+      "recorded_duration_s": 24.476,
+      "mean_error_m": 5.8346,
+      "rmse_m": 7.3713,
+      "median_error_m": 5.6765,
+      "p90_error_m": 12.9034,
+      "max_error_m": 13.7587,
+      "mean_abs_x_error_m": 0.0,
+      "mean_abs_y_error_m": 5.8346,
+      "initial_error_m": 12.0695,
+      "initial_x_error_m": 0.0,
+      "initial_y_error_m": -12.0695,
+      "first_estimated": {
+        "x": 70.7,
+        "y": 28.4305
+      }
+    },
+    {
+      "run_label": "2",
+      "source_file": "backend/data/test_recordings/Short Hallway 2 30m Fast iPhone 14 Pro Run 2 (2).json",
+      "session_id": "test-navigation-1780436129536-0vhh6td2",
+      "sample_count": 96,
+      "recorded_duration_s": 24.032,
+      "mean_error_m": 5.9738,
+      "rmse_m": 6.7119,
+      "median_error_m": 6.7806,
+      "p90_error_m": 9.4942,
+      "max_error_m": 10.9032,
+      "mean_abs_x_error_m": 0.0,
+      "mean_abs_y_error_m": 5.9738,
+      "initial_error_m": 8.1854,
+      "initial_x_error_m": 0.0,
+      "initial_y_error_m": -8.1854,
+      "first_estimated": {
+        "x": 70.7,
+        "y": 32.3146
+      }
+    },
+    {
+      "run_label": "3",
+      "source_file": "backend/data/test_recordings/Short Hallway 2 30m Fast iPhone 14 Pro Run 3 (2).json",
+      "session_id": "test-navigation-1780436129536-0vhh6td2",
+      "sample_count": 94,
+      "recorded_duration_s": 23.479,
+      "mean_error_m": 6.0031,
+      "rmse_m": 6.5469,
+      "median_error_m": 5.9253,
+      "p90_error_m": 9.5378,
+      "max_error_m": 11.6995,
+      "mean_abs_x_error_m": 0.0,
+      "mean_abs_y_error_m": 6.0031,
+      "initial_error_m": 5.9575,
+      "initial_x_error_m": 0.0,
+      "initial_y_error_m": -5.9575,
+      "first_estimated": {
+        "x": 70.7,
+        "y": 34.5425
+      }
+    },
+    {
+      "run_label": "4",
+      "source_file": "backend/data/test_recordings/Short Hallway 2 30m Fast iPhone 14 Pro Run 4 (2).json",
+      "session_id": "test-navigation-1780436129536-0vhh6td2",
+      "sample_count": 95,
+      "recorded_duration_s": 23.641,
+      "mean_error_m": 7.7423,
+      "rmse_m": 8.3094,
+      "median_error_m": 7.8415,
+      "p90_error_m": 11.8431,
+      "max_error_m": 14.3929,
+      "mean_abs_x_error_m": 0.0,
+      "mean_abs_y_error_m": 7.7423,
+      "initial_error_m": 13.8658,
+      "initial_x_error_m": 0.0,
+      "initial_y_error_m": -13.8658,
+      "first_estimated": {
+        "x": 70.7,
+        "y": 26.6342
+      }
+    },
+    {
+      "run_label": "5",
+      "source_file": "backend/data/test_recordings/Short Hallway 2 30m Fast iPhone 14 Pro Run 5 (2).json",
+      "session_id": "test-navigation-1780436129536-0vhh6td2",
+      "sample_count": 101,
+      "recorded_duration_s": 25.075,
+      "mean_error_m": 5.6048,
+      "rmse_m": 5.92,
+      "median_error_m": 6.0794,
+      "p90_error_m": 7.9393,
+      "max_error_m": 9.068,
+      "mean_abs_x_error_m": 0.0,
+      "mean_abs_y_error_m": 5.6048,
+      "initial_error_m": 9.068,
+      "initial_x_error_m": 0.0,
+      "initial_y_error_m": -9.068,
+      "first_estimated": {
+        "x": 70.7,
+        "y": 31.432
+      }
+    }
+  ]
+}

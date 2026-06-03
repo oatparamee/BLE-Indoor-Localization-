@@ -486,7 +486,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = LBK2368XCC;
+				DEVELOPMENT_TEAM = G4HGC2FQA7;
 				ENABLE_BITCODE = NO;
 				INFOPLIST_FILE = BLEIndoorLocalization/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.1;
@@ -501,7 +501,7 @@
 					"-lc++",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = "org.reactjs.native.example.$(PRODUCT_NAME:rfc1034identifier)";
-				"PRODUCT_BUNDLE_IDENTIFIER[sdk=iphoneos*]" = com.phil.bleindoorlocalization;
+				"PRODUCT_BUNDLE_IDENTIFIER[sdk=iphoneos*]" = com.phil.bleindoorlocal;
 				PRODUCT_NAME = BLEIndoorLocalization;
 				SWIFT_OBJC_INTEROP_MODE = objcxx;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
@@ -517,7 +517,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = LBK2368XCC;
+				DEVELOPMENT_TEAM = G4HGC2FQA7;
 				INFOPLIST_FILE = BLEIndoorLocalization/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.1;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -531,7 +531,7 @@
 					"-lc++",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = "org.reactjs.native.example.$(PRODUCT_NAME:rfc1034identifier)";
-				"PRODUCT_BUNDLE_IDENTIFIER[sdk=iphoneos*]" = com.phil.bleindoorlocalization;
+				"PRODUCT_BUNDLE_IDENTIFIER[sdk=iphoneos*]" = com.phil.bleindoorlocal;
 				PRODUCT_NAME = BLEIndoorLocalization;
 				SWIFT_OBJC_INTEROP_MODE = objcxx;
 				SWIFT_VERSION = 5.0;
